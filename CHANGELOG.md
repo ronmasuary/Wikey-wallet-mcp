@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-06-07
+
+### Fixed
+
+- **`wallet_keys_create` no longer deadlocks.** It was routed through the
+  prompt-driven signing engine with an empty queue, but `keys create` signs over
+  the signer's HTTP API (no stdin proof) and ends with a `Set as default? (y/n)`
+  prompt. With no responder the child never exited; the call rode the timeout and
+  surfaced an error even though the key had already been created, so a retry
+  produced duplicate keys. It now runs session-gated, answering the y/n (from
+  `setDefault`) so wallet-cli prints its JSON result and exits cleanly.
+
+### Changed
+
+- **Install script is owned by the package.** `install-child-mode.cjs` is now
+  resolved at the package root (beside `dist/`) — `WIKEY_INSTALL_SCRIPT` override
+  → bundled → `~/.ssp` fallback — so a host (e.g. an agent) no longer needs to
+  point the server at it. The script carries the GitLab deploy token and stays
+  gitignored, shipped with the package rather than committed.
+
 ## [1.0.0] - 2026-06-03
 
 ### Added
