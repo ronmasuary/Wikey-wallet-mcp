@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import {
   locateInstallScript,
+  bundledInstallScriptPath,
   defaultInstallScriptPath,
   binsComplete,
   InstallScriptMissingError,
@@ -48,14 +49,23 @@ test('locateInstallScript: WIKEY_INSTALL_SCRIPT takes precedence', () => {
   }
 });
 
-test('locateInstallScript: falls back to ~/.ssp/install-child-mode.cjs', () => {
+test('locateInstallScript: package-bundled script resolves before the ~/.ssp fallback', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'wmcp-inst-'));
   withEnv({ WIKEY_INSTALL_SCRIPT: undefined, WIKEY_SSP_DIR: dir }, () => {
-    assert.equal(locateInstallScript(), null); // not present yet
+    const bundled = bundledInstallScriptPath();
+    assert.equal(bundled, path.resolve(fileURLToPath(new URL('../', import.meta.url)), 'install-child-mode.cjs'));
     const fallback = defaultInstallScriptPath();
     assert.equal(fallback, path.join(dir, 'install-child-mode.cjs'));
-    writeFileSync(fallback, '// stub');
-    assert.equal(locateInstallScript(), fallback);
+
+    if (existsSync(bundled)) {
+      // Local/dev: the gitignored installer is bundled at the package root → it wins.
+      assert.equal(locateInstallScript(), bundled);
+    } else {
+      // Clean checkout (installer not yet placed): no env, no bundle → ~/.ssp fallback.
+      assert.equal(locateInstallScript(), null);
+      writeFileSync(fallback, '// stub');
+      assert.equal(locateInstallScript(), fallback);
+    }
   });
   rmSync(dir, { recursive: true, force: true });
 });

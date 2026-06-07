@@ -1,8 +1,10 @@
-// External install-script locator + auto-runner (Distribution, resolved this
-// session). The installer (`install-child-mode.cjs`) carries the GitLab deploy
-// token and therefore must NOT live in this open-source repo. It lives on the
-// VM/machine. We locate it via the WIKEY_INSTALL_SCRIPT env var, falling back to
-// ~/.ssp/install-child-mode.cjs, and auto-run it on startup when binaries are
+// External install-script locator + auto-runner. The installer
+// (`install-child-mode.cjs`) carries the GitLab deploy token and therefore must
+// NOT be committed to this open-source repo — it is gitignored and shipped
+// alongside the package. The MCP server OWNS it: we resolve it next to the
+// package root (one beside `dist/`) so no consumer (e.g. ragent) needs to know
+// where it lives. We still honor a WIKEY_INSTALL_SCRIPT override and the
+// historical ~/.ssp fallback, then auto-run it on startup when binaries are
 // missing.
 //
 // Critical: the installer's output goes to STDERR only — stdout is the MCP
@@ -12,8 +14,19 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { resolveBins, type ResolvedBins } from './binPaths.js';
+
+/**
+ * The install script bundled with the package itself (the MCP server owns it).
+ * This module compiles to `dist/core/installer.js`, so the package root — where
+ * `install-child-mode.cjs` sits beside `dist/` — is two levels up.
+ */
+export function bundledInstallScriptPath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..', 'install-child-mode.cjs');
+}
 
 /** Default fallback location for the install script. */
 export function defaultInstallScriptPath(): string {
@@ -21,12 +34,15 @@ export function defaultInstallScriptPath(): string {
 }
 
 /**
- * Locate the install script: WIKEY_INSTALL_SCRIPT env var, then the
- * ~/.ssp fallback. Returns the path only if the file exists, else null.
+ * Locate the install script: explicit WIKEY_INSTALL_SCRIPT override, then the
+ * package-bundled script, then the ~/.ssp fallback. Returns the path only if
+ * the file exists, else null.
  */
 export function locateInstallScript(): string | null {
   const fromEnv = process.env.WIKEY_INSTALL_SCRIPT;
   if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  const bundled = bundledInstallScriptPath();
+  if (existsSync(bundled)) return bundled;
   const fallback = defaultInstallScriptPath();
   if (existsSync(fallback)) return fallback;
   return null;
@@ -49,6 +65,7 @@ function lookedAt(): string {
   const env = process.env.WIKEY_INSTALL_SCRIPT;
   return [
     env ? `WIKEY_INSTALL_SCRIPT=${env}` : 'WIKEY_INSTALL_SCRIPT (unset)',
+    bundledInstallScriptPath(),
     defaultInstallScriptPath(),
   ].join('; ');
 }
