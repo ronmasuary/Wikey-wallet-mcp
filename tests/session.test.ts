@@ -179,6 +179,35 @@ test('rotateNow swaps the key and records lastRotation; serialized with signing'
   }
 });
 
+test('runWithSession (keys create): answers the y/n, returns JSON, no hang', async () => {
+  // Regression: keys create signs over the signer HTTP API and ends with a
+  // `Set as default? (y/n)` prompt. Routed through the prompt engine with an
+  // empty queue it deadlocked on that prompt and rode the timeout (key created,
+  // client errors, model retries → duplicate keys). runWithSession answers the
+  // y/n via `input` so wallet-cli prints its JSON and exits.
+  const port = await freePort();
+  const ctx = setupEnv(port, { STUB_WC: JSON.stringify({ keysCreate: true }) });
+  try {
+    const { s } = makeSession(port, ctx.dir);
+
+    // default ('n') — key created, not set as default
+    const outNo = await s.runWithSession(['keys', 'create'], { input: 'n\n' });
+    const parsedNo = JSON.parse(outNo);
+    assert.equal(parsedNo.success, true);
+    assert.equal(parsedNo.data.id, 'omnistar1xyz');
+    assert.equal(parsedNo.data.setAsDefault, false);
+    assert.ok(s.status().active, 'session should be up after a session-gated run');
+
+    // 'y' — set as default
+    const outYes = await s.runWithSession(['keys', 'create'], { input: 'y\n' });
+    assert.equal(JSON.parse(outYes).data.setAsDefault, true);
+
+    s.shutdown();
+  } finally {
+    teardownEnv(ctx);
+  }
+});
+
 test('fatal rotation (exit 4) wedges the session; further signing is refused', async () => {
   const port = await freePort();
   const ctx = setupEnv(port, { STUB_ROTATE_EXIT: '4' });

@@ -32,6 +32,18 @@ const nextLine = () =>
   });
 
 async function main() {
+  // keys-create simulation, mirroring real `wallet-cli keys create`: the human
+  // block + the y/n confirmation go to STDERR; the machine JSON is written to
+  // STDOUT only AFTER the y/n is answered on stdin. With no answer it blocks
+  // forever (reproducing the prompt-engine deadlock) — the session-gated runner
+  // must supply the y/n line.
+  if (sc.keysCreate) {
+    process.stderr.write('Key created successfully:\n  ID: omnistar1xyz\n');
+    process.stderr.write('Set this key as the default address and pubkey? (y/n): ');
+    const ans = (await nextLine()).trim();
+    process.stdout.write(JSON.stringify({ success: true, data: { id: 'omnistar1xyz', setAsDefault: ans === 'y' } }));
+    process.exit(0);
+  }
   for (const p of sc.prompts ?? []) {
     process.stderr.write(p + '\n');
     await nextLine();

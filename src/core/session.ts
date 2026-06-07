@@ -23,6 +23,7 @@ import { Mutex } from './mutex.js';
 import { resolveKekPolicy } from './binPaths.js';
 import { mintKey, runHmacRotation } from './rotation.js';
 import { runSigningPrompted, type PromptStep, type PromptedOpts } from './signing.js';
+import { runWalletCliWithInput } from './query.js';
 
 export interface SessionBins {
   signingServer: string;
@@ -201,6 +202,26 @@ export class SessionManager {
         args,
         queue,
         ...(opts ? { opts } : {}),
+      });
+    });
+  }
+
+  /**
+   * Run a session-gated wallet-cli command that signs over the signer's HTTP
+   * API rather than the stdin proof flow (e.g. `keys create`). Brings up SSP,
+   * then runs it answering its single y/n confirmation via `input` so wallet-cli
+   * emits its JSON result and exits — see runWalletCliWithInput. Serialized with
+   * signing/rotation via the same mutex.
+   */
+  async runWithSession(args: string[], opts: { input?: string; timeoutMs?: number } = {}): Promise<string> {
+    await this.ensureSession();
+    return this.mutex.runExclusive(() => {
+      if (!this.key) throw new Error('no active HMAC key');
+      return runWalletCliWithInput({
+        walletCli: this.bins.walletCli,
+        args,
+        ...(opts.input !== undefined ? { input: opts.input } : {}),
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
     });
   }

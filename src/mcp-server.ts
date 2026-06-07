@@ -520,9 +520,12 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     case 'wallet_keys_get':
       return query(['keys', 'get', '--id', String(input.id)]);
     case 'wallet_keys_create': {
-      const args = ['keys', 'create'];
-      if (input.setDefault) args.push('--set-default');
-      return session.signPrompted(args, []);
+      // keys create signs over the signer's HTTP API (no stdin proof) and ends
+      // with a `Set as default? (y/n)` prompt. Answer it (y/n from setDefault)
+      // so wallet-cli prints its JSON result and exits. Run it session-gated —
+      // NOT via the prompt engine, which would deadlock on that y/n and time out
+      // even though the key was already created.
+      return session.runWithSession(['keys', 'create'], { input: input.setDefault ? 'y\n' : 'n\n' });
     }
 
     // ── config ──
