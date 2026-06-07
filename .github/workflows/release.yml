@@ -28,15 +28,19 @@ jobs:
       - name: Test
         run: npm test
 
-      # Publish to npm so hosts can `npx wikey-wallet-mcp`.
-      # Requires the NPM_TOKEN secret to be set on the repo.
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
+      # Create the GitHub Release first so a missing/invalid NPM_TOKEN
+      # cannot leave the Releases section empty. npm publish runs after.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           generate_release_notes: true
+
+      # Publish to npm so hosts can `npx wikey-wallet-mcp`.
+      # Requires the NPM_TOKEN secret to be set on the repo.
+      # If the token is absent this step fails (job goes red) but the
+      # GitHub Release above is already published.
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
