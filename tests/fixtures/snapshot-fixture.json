@@ -1,0 +1,3120 @@
+{
+  "success": true,
+  "data": {
+    "address": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+    "snapshot": [
+      {
+        "name": "wally.a_safe",
+        "address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+        "assets": {
+          "assets": [
+            {
+              "symbol": "BTC",
+              "address": "bc1qlveyec7dqdt7ypad3fxj0y8wxsyjdjx7wus3yz",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "ETH",
+              "address": "0x73655e3701C711Aa9BF8bCe6a73089eb92306FBe",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "MATIC",
+              "address": "0x73655e3701C711Aa9BF8bCe6a73089eb92306FBe",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "POL",
+              "address": "0x73655e3701C711Aa9BF8bCe6a73089eb92306FBe",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "BASE",
+              "address": "0x73655e3701C711Aa9BF8bCe6a73089eb92306FBe",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "AVAX",
+              "address": "0x73655e3701C711Aa9BF8bCe6a73089eb92306FBe",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "DOGE",
+              "address": "DU3JQLXhpriHAzgrYXtTLKbyzSy67Dyknh",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "OST",
+              "address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+              "algo": "ecdsa"
+            },
+            {
+              "symbol": "SOL",
+              "address": "3icHSpradpsDzrhFxRLvVszJa4zeKcTjHy2XWgrLvqKT",
+              "algo": "eddsa"
+            },
+            {
+              "symbol": "ADA",
+              "address": "addr1v8pm6njn8n49vm9hvmlvl97g5s38x6k2uwk6gjxx9dac8rcv7na8m",
+              "algo": "eddsa"
+            },
+            {
+              "symbol": "XRP",
+              "address": "r4LqNfhxkB9WiE9EHxn6THo1vJ7LYwBbZQ",
+              "algo": "eddsa"
+            }
+          ],
+          "ecx": "114628145278741861183321327136140601013251339615051657256269425091214722948317",
+          "ecy": "52317190912121792216762701982169205751256635567998140856998540837029210703115",
+          "edx": "29640632374350515913386401217744753899225639872470748552805528913657632545440",
+          "edy": "32053646045198286109899276058511824450731440615539548302531781123517543964712",
+          "ecPuk": "04fd6d3b271916ee3833382e4ae016460510636eb4ee2daba196ceae04cfc75cdd73aa7b0f2de6bf4124299b592ecc24ef8fe6bf722f57088aa3c786eed253450b",
+          "edPuk": "2860150e4d45e4cdc70169a7e59342fff12da8721022d1d9d735c9a082b8dd46",
+          "hd_keys": {}
+        },
+        "isMain": true,
+        "balance": {
+          "accounts_balance": [],
+          "activityBalance": [
+            {
+              "activity": "transaction",
+              "assets": {
+                "OST": {
+                  "asset": "OST",
+                  "value": null,
+                  "ledger": [
+                    {
+                      "action": "Transaction",
+                      "id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e",
+                      "date": "2026-05-17T11:24:09.000Z",
+                      "transfer_status": "complete",
+                      "transaction_id": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E",
+                      "address_from": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "value": null,
+                      "network_fee": null
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "ordersBook": []
+        },
+        "lastActive": 1779969051000,
+        "groups": [
+          {
+            "name": "Primary",
+            "id": "Primary",
+            "isValid": true,
+            "isDeleted": false,
+            "class": "group",
+            "object": {
+              "class": "group",
+              "name": "Primary",
+              "id": "Primary",
+              "parentGroup": "",
+              "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-9",
+              "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+              "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+              "slot": "18560794",
+              "timestamp": "1778845454000"
+            },
+            "process": {
+              "currentPhase": {
+                "index": "3",
+                "name": "Validatad",
+                "description": "The object finished the validation Process.",
+                "data": "",
+                "errors": ""
+              }
+            },
+            "nestedObjects": [
+              {
+                "name": "Genesis Objects-Creation Policy",
+                "id": "policy-genesis",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis",
+                  "name": "Genesis Objects-Creation Policy",
+                  "description": "Require 100% voting for objects creation.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "group"
+                    },
+                    {
+                      "key": "class",
+                      "value": "policy"
+                    },
+                    {
+                      "key": "class",
+                      "value": "user"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "100"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-10",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": "",
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Transaction Policy",
+                "id": "policy-genesis-transaction-voting",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-transaction-voting",
+                  "name": "Genesis Transaction Policy",
+                  "description": "Genesis policy for transactions. require 100% voting.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "100"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-8",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Transaction Policy",
+                "id": "policy-genesis-transaction-linkid",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-transaction-linkid",
+                  "name": "Genesis Transaction Policy",
+                  "description": "Genesis policy for transactions.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.link-id"
+                    },
+                    {
+                      "class": "condition.immutable"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-7",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "policy-deposit",
+                "id": "policy-deposit-transactionid",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-deposit-transactionid",
+                  "name": "policy-deposit",
+                  "description": "Validates the Deposit object.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "deposit"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.transaction_id",
+                      "params": [
+                        {
+                          "key": "path",
+                          "value": "deposit"
+                        },
+                        {
+                          "key": "destination",
+                          "value": "this_safe"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-6",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Immutable-Vote Policy",
+                "id": "policy-genesis-vote-execution",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-vote-execution",
+                  "name": "Genesis Immutable-Vote Policy",
+                  "description": "Genesis policy for Vote objects. Allowed with no voting.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "vote"
+                    },
+                    {
+                      "key": "class",
+                      "value": "execution"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "0"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    },
+                    {
+                      "class": "condition.immutable"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-5",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Profile Policy",
+                "id": "policy-profile",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-profile",
+                  "name": "Genesis Profile Policy",
+                  "description": "Allows creation of profile objects with 0% voting.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "profile"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "0"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-4",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Valid Dependencies of Pbject Policy",
+                "id": "policy-valid-dependencies-of-object",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-valid-dependencies-of-object",
+                  "name": "Genesis Valid Dependencies of Pbject Policy",
+                  "description": "Approve if all objects' dependencies are valid objects.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "group"
+                    },
+                    {
+                      "key": "class",
+                      "value": "policy"
+                    },
+                    {
+                      "key": "class",
+                      "value": "user"
+                    },
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "execution"
+                    },
+                    {
+                      "key": "class",
+                      "value": "profile"
+                    },
+                    {
+                      "key": "class",
+                      "value": "deposit"
+                    },
+                    {
+                      "key": "class",
+                      "value": "vote"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.dependencies"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-3",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "user",
+                "object": {
+                  "class": "user",
+                  "id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                  "parentGroup": "Primary",
+                  "public_key": [
+                    "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                  ],
+                  "link": {
+                    "id": "##public_key",
+                    "name": "profileLink",
+                    "safe_id": "##public_key",
+                    "link_parameter": [
+                      "profile",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "link_data": [
+                      "params",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "merge": "true"
+                  },
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-2",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000",
+                  "profile": [
+                    {
+                      "key": "user_name",
+                      "value": "wally.a"
+                    }
+                  ],
+                  "safes": [
+                    {
+                      "safe_address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "source_profile": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                    }
+                  ],
+                  "update_user_address_slot": ""
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Create By User in Group Policy",
+                "id": "policy-genesis-create_by_user_in_group",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-create_by_user_in_group",
+                  "name": "Genesis Create By User in Group Policy",
+                  "description": "Approve only objects that where created by valid user of the group.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "group"
+                    },
+                    {
+                      "key": "class",
+                      "value": "policy"
+                    },
+                    {
+                      "key": "class",
+                      "value": "user"
+                    },
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "execution"
+                    },
+                    {
+                      "key": "class",
+                      "value": "profile"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.create_by_user_ingroup"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-1",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "safe_profile",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "profile",
+                "object": {
+                  "class": "profile",
+                  "id": "safe_profile",
+                  "parentGroup": "Primary",
+                  "params": [
+                    {
+                      "key": "safe_name",
+                      "value": "wally.a_safe"
+                    },
+                    {
+                      "key": "safe_public_key",
+                      "value": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2"
+                    },
+                    {
+                      "key": "safe_mpcid",
+                      "value": "4A06E25E5B6DB505028DA486908829EE4DF2486B1E9E1A4769BE83C07A0469DF"
+                    },
+                    {
+                      "key": "safe_xypair",
+                      "value": "114628145278741861183321327136140601013251339615051657256269425091214722948317 52317190912121792216762701982169205751256635567998140856998540837029210703115"
+                    },
+                    {
+                      "key": "safe_edxypair",
+                      "value": "29640632374350515913386401217744753899225639872470748552805528913657632545440 32053646045198286109899276058511824450731440615539548302531781123517543964712"
+                    },
+                    {
+                      "key": "safe_p256xypair",
+                      "value": "undefined undefined"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2"
+                        },
+                        {
+                          "message": "Approved. Object created by safe (omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2)})"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-profile",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 0"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "transaction",
+                "object": {
+                  "class": "transaction",
+                  "id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "address": "omnistar1zqhqcwpe6tqypdz9shedsvcarql53q98ukt0mf",
+                  "amount": 1500000000,
+                  "asset": "OST",
+                  "is_main": true,
+                  "link": {
+                    "id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e-link",
+                    "safe_id": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                    "link_parameter": "transfer"
+                  },
+                  "fee_rate": 300000,
+                  "SIGNATURE": "0827EE063B17B41745B0CED80810042AA8D5131432BEB48B3666ADF2042F195E",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18592782",
+                  "timestamp": "1779017049000",
+                  "transfer": [
+                    {
+                      "transfer_status": "complete"
+                    },
+                    {
+                      "key": "transfer_id",
+                      "value": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E"
+                    },
+                    {
+                      "key": "transfer_data",
+                      "value": {
+                        "transaction_id": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E",
+                        "address_from": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                        "unit": "",
+                        "status": "complete",
+                        "title": "Tx OST Exec (0827EE06)"
+                      }
+                    },
+                    {
+                      "key": "transfer_date",
+                      "value": "5/17/2026"
+                    },
+                    {
+                      "key": "transfer_time",
+                      "value": "11:25:12 AM"
+                    }
+                  ]
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "4",
+                    "name": "Executed",
+                    "description": "The transaction was executed on the target Blockchain.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis-transaction-linkid",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.link-id"
+                        },
+                        {
+                          "link_id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e-link"
+                        },
+                        {
+                          "message": "Link id (5c487697-6ac7-4882-a31e-b3e5e5fb9d0e-link) is valid."
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis-transaction-voting",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ],
+                      [
+                        {
+                          "transfer_status": "complete"
+                        },
+                        {
+                          "key": "transfer_id",
+                          "value": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E"
+                        },
+                        {
+                          "key": "transfer_data",
+                          "value": {
+                            "transaction_id": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E",
+                            "address_from": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                            "unit": "",
+                            "status": "complete",
+                            "title": "Tx OST Exec (0827EE06)"
+                          }
+                        },
+                        {
+                          "key": "transfer_date",
+                          "value": "5/17/2026"
+                        },
+                        {
+                          "key": "transfer_time",
+                          "value": "11:25:12 AM"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e-link",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "execution",
+                "object": {
+                  "id": "5c487697-6ac7-4882-a31e-b3e5e5fb9d0e-link",
+                  "class": "execution",
+                  "parentGroup": "Primary",
+                  "params": [
+                    {
+                      "transfer_status": "complete"
+                    },
+                    {
+                      "key": "transfer_id",
+                      "value": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E"
+                    },
+                    {
+                      "key": "transfer_data",
+                      "value": {
+                        "transaction_id": "2B5CF9BC782A0B65421BCB89F97D1C72CCCBD8F08D50891F43472B062B60BC4E",
+                        "address_from": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                        "unit": "",
+                        "status": "complete",
+                        "title": "Tx OST Exec (0827EE06)"
+                      }
+                    },
+                    {
+                      "key": "transfer_date",
+                      "value": "5/17/2026"
+                    },
+                    {
+                      "key": "transfer_time",
+                      "value": "11:25:12 AM"
+                    }
+                  ],
+                  "SIGNATURE": "4CB013B6E60ACFA7738D12E5768583F32F8B45852DBC59F637EB1F6D080A8C95",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18592795",
+                  "timestamp": "1779017119000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2"
+                        },
+                        {
+                          "message": "Approved. Object created by safe (omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2)})"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis-vote-execution",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 0"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Large Transaction Approval",
+                "id": "cb691d75-3cce-46de-ac38-243f370b8912",
+                "isValid": false,
+                "isDeleted": true,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "cb691d75-3cce-46de-ac38-243f370b8912",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "originalObjectSIG": "9DBC02E5D1B44EA6ABA78E1AA6A2397F1098106A56C4578CA41EDEEBAC24903D",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    }
+                  ],
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "id": "bd506103-2dac-4977-a460-d16c68678199",
+                      "name": "Vote condition",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": 50
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": true
+                        }
+                      ]
+                    },
+                    {
+                      "class": "condition.amount",
+                      "id": "275ba708-7761-4f1a-a515-cf6e475c74d6",
+                      "name": "Amount condition",
+                      "params": [
+                        {
+                          "key": "min",
+                          "value": 10
+                        },
+                        {
+                          "key": "max",
+                          "value": 999999999
+                        }
+                      ]
+                    }
+                  ],
+                  "name": "Large Transaction Approval",
+                  "description": "Requires 50% approval for transactions over $10",
+                  "SIGNATURE": "56EDC3DF0DB7E0E5929E3C91022DB4DFD764157D44DD2669003F517E2C9A63F1",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18609752",
+                  "timestamp": "1779107426000",
+                  "last_modified": "1779108258000",
+                  "affected_by": [
+                    "9DBC02E5D1B44EA6ABA78E1AA6A2397F1098106A56C4578CA41EDEEBAC24903D",
+                    "C35FF129B6044F7EF49B0809EA1E640BD80EFC04F1E5B11B7781998F7A0A3DDD"
+                  ],
+                  "pending_objects": []
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "1b95e3e7-ca38-4446-8426-e3b8176679aa",
+                "isValid": false,
+                "isDeleted": true,
+                "class": "user",
+                "object": {
+                  "class": "user",
+                  "id": "1b95e3e7-ca38-4446-8426-e3b8176679aa",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "public_key": [
+                    "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                  ],
+                  "link": {
+                    "id": "##public_key",
+                    "name": "profileLink",
+                    "safe_id": "##public_key",
+                    "link_parameter": [
+                      "profile",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "link_data": [
+                      "params",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "merge": "true"
+                  },
+                  "SIGNATURE": "38C5F7A0C8B938311A6A4DB1C6839ECF388F00B7D2620A7B969926F828993156",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18611282",
+                  "timestamp": "1779115262000",
+                  "profile": [
+                    {
+                      "key": "user_name",
+                      "value": "Tsing"
+                    }
+                  ],
+                  "safes": [
+                    {
+                      "safe_address": "omnistar1zqhqcwpe6tqypdz9shedsvcarql53q98ukt0mf",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    },
+                    {
+                      "safe_address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    }
+                  ],
+                  "update_user_address_slot": "",
+                  "withdraw_counter": 0,
+                  "withdraw": [],
+                  "affected_by": [
+                    "8099D801CBA108BD98CE5C44492A9766262B95A6ED4B28613E6357BCD6FE41FE"
+                  ],
+                  "last_modified": "1779116461000",
+                  "pending_objects": []
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "45cd85b6-f632-4fdb-9617-ccca2bdcaef0",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "vote",
+                "object": {
+                  "class": "vote",
+                  "id": "45cd85b6-f632-4fdb-9617-ccca2bdcaef0",
+                  "parentGroup": "Primary",
+                  "SIGNATURE": "4A78B19132E2445AEB0D0993BCA8A6452C007E8D4E025BF963F68ADA86F60C42",
+                  "comment": "",
+                  "execute": true,
+                  "description": "",
+                  "user_public_key": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0",
+                  "votes": [
+                    {
+                      "vote": "YES",
+                      "message": "",
+                      "applyOn": [
+                        {
+                          "key": "SIGNATURE",
+                          "value": "8099D801CBA108BD98CE5C44492A9766262B95A6ED4B28613E6357BCD6FE41FE"
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18611283",
+                  "timestamp": "1779116467000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-vote-execution",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "No Vote For User",
+                          "voteSIGNATURE": "",
+                          "nestedUsers": 2,
+                          "nestedVotes": 0,
+                          "nestedPolicies": 2
+                        },
+                        {
+                          "user": [
+                            "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                          ],
+                          "user_id": "1b95e3e7-ca38-4446-8426-e3b8176679aa",
+                          "group": "Primary",
+                          "vote": "No Vote For User",
+                          "voteSIGNATURE": "",
+                          "nestedUsers": 2,
+                          "nestedVotes": 0,
+                          "nestedPolicies": 2
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 2,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. yesVotersCounter=0 Users in Group= 2 for group: Primary Required: 0"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis-vote-execution",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 0"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "d5ea3d66-ae09-4a7c-b222-3c78f572368e",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "vote",
+                "object": {
+                  "class": "vote",
+                  "id": "d5ea3d66-ae09-4a7c-b222-3c78f572368e",
+                  "parentGroup": "Primary",
+                  "votes": [
+                    {
+                      "vote": "YES",
+                      "message": "",
+                      "applyOn": [
+                        {
+                          "key": "SIGNATURE",
+                          "value": "8099D801CBA108BD98CE5C44492A9766262B95A6ED4B28613E6357BCD6FE41FE"
+                        }
+                      ]
+                    }
+                  ],
+                  "user_public_key": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "SIGNATURE": "78436DF707B94E1D70E394564F3FCF388877CE20CEDD1FAD496085604CE7FD0C",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18611374",
+                  "timestamp": "1779116954000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-vote-execution",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "No Vote For User",
+                          "voteSIGNATURE": "",
+                          "nestedUsers": 2,
+                          "nestedVotes": 0,
+                          "nestedPolicies": 2
+                        },
+                        {
+                          "user": [
+                            "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                          ],
+                          "user_id": "1b95e3e7-ca38-4446-8426-e3b8176679aa",
+                          "group": "Primary",
+                          "vote": "No Vote For User",
+                          "voteSIGNATURE": "",
+                          "nestedUsers": 2,
+                          "nestedVotes": 0,
+                          "nestedPolicies": 2
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 2,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. yesVotersCounter=0 Users in Group= 2 for group: Primary Required: 0"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis-vote-execution",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 0"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "user",
+                "object": {
+                  "class": "user",
+                  "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "public_key": [
+                    "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                  ],
+                  "link": {
+                    "id": "##public_key",
+                    "name": "profileLink",
+                    "safe_id": "##public_key",
+                    "link_parameter": [
+                      "profile",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "link_data": [
+                      "params",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "merge": "true"
+                  },
+                  "SIGNATURE": "41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18611386",
+                  "timestamp": "1779117018000",
+                  "profile": [
+                    {
+                      "key": "user_name",
+                      "value": "Tsing"
+                    }
+                  ],
+                  "safes": [
+                    {
+                      "safe_address": "omnistar1zqhqcwpe6tqypdz9shedsvcarql53q98ukt0mf",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    },
+                    {
+                      "safe_address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    }
+                  ],
+                  "update_user_address_slot": "",
+                  "withdraw_counter": 0,
+                  "withdraw": [],
+                  "pending_objects": [
+                    {
+                      "name": "undefined",
+                      "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                      "isValid": false,
+                      "isDeleted": false,
+                      "class": "policy",
+                      "object": {
+                        "class": "policy",
+                        "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                        "parentGroup": "Primary",
+                        "execute": true,
+                        "originalObjectSIG": "41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686",
+                        "applyFunction": {
+                          "functionName": "deleteObject"
+                        },
+                        "SIGNATURE": "A30351C40EAC22AC56A352E25F79736E88165DCC1C61B42F03EDED0E26326FC3",
+                        "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                        "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                        "slot": "18611676",
+                        "timestamp": "1779118574000"
+                      },
+                      "process": {
+                        "currentPhase": {
+                          "index": "2",
+                          "name": "In Validation Process",
+                          "description": "The object is being validated.",
+                          "data": [
+                            [
+                              {
+                                "policyID": "policy-genesis-create_by_user_in_group",
+                                "policy-mandatory": "true",
+                                "policy-group": "Primary",
+                                "conditionStatus": "1",
+                                "conditionClass": "condition.create_by_user_ingroup"
+                              },
+                              {
+                                "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                                "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "userGroup": "Primary"
+                              },
+                              {
+                                "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                              }
+                            ],
+                            [
+                              {
+                                "policyID": "policy-genesis",
+                                "policy-mandatory": "undefined",
+                                "policy-group": "Primary",
+                                "conditionStatus": "4",
+                                "conditionClass": "condition.voting"
+                              },
+                              {
+                                "user": [
+                                  "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                                ],
+                                "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "user": [
+                                  "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                                ],
+                                "user_id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "group": "Primary",
+                                "members": 2,
+                                "yes": 0,
+                                "no": 0
+                              },
+                              {
+                                "message": "In Process. Not all users voted. votersCounter=0 groupUsers=2 for group: Primary"
+                              }
+                            ]
+                          ],
+                          "errors": ""
+                        }
+                      }
+                    },
+                    {
+                      "name": "undefined",
+                      "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                      "isValid": false,
+                      "isDeleted": false,
+                      "class": "policy",
+                      "object": {
+                        "class": "policy",
+                        "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                        "parentGroup": "Primary",
+                        "execute": true,
+                        "originalObjectSIG": "41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686",
+                        "applyFunction": {
+                          "functionName": "deleteObject"
+                        },
+                        "SIGNATURE": "47AF9BED492DA5CA86CAEBB374B192D3F66F2CA61EA4BA27D2C9D0E1DEC042FA",
+                        "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                        "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                        "slot": "18770256",
+                        "timestamp": "1779969051000"
+                      },
+                      "process": {
+                        "currentPhase": {
+                          "index": "2",
+                          "name": "In Validation Process",
+                          "description": "The object is being validated.",
+                          "data": [
+                            [
+                              {
+                                "policyID": "policy-genesis-create_by_user_in_group",
+                                "policy-mandatory": "true",
+                                "policy-group": "Primary",
+                                "conditionStatus": "1",
+                                "conditionClass": "condition.create_by_user_ingroup"
+                              },
+                              {
+                                "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                                "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "userGroup": "Primary"
+                              },
+                              {
+                                "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                              }
+                            ],
+                            [
+                              {
+                                "policyID": "policy-genesis",
+                                "policy-mandatory": "undefined",
+                                "policy-group": "Primary",
+                                "conditionStatus": "4",
+                                "conditionClass": "condition.voting"
+                              },
+                              {
+                                "user": [
+                                  "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                                ],
+                                "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "user": [
+                                  "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                                ],
+                                "user_id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "group": "Primary",
+                                "members": 2,
+                                "yes": 0,
+                                "no": 0
+                              },
+                              {
+                                "message": "In Process. Not all users voted. votersCounter=0 groupUsers=2 for group: Primary"
+                              }
+                            ]
+                          ],
+                          "errors": ""
+                        }
+                      }
+                    }
+                  ]
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              }
+            ],
+            "nestedPolicies": [
+              {
+                "name": "Genesis Objects-Creation Policy",
+                "id": "policy-genesis",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis",
+                  "name": "Genesis Objects-Creation Policy",
+                  "description": "Require 100% voting for objects creation.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "group"
+                    },
+                    {
+                      "key": "class",
+                      "value": "policy"
+                    },
+                    {
+                      "key": "class",
+                      "value": "user"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "100"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-10",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": "",
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Transaction Policy",
+                "id": "policy-genesis-transaction-voting",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-transaction-voting",
+                  "name": "Genesis Transaction Policy",
+                  "description": "Genesis policy for transactions. require 100% voting.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "100"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-8",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Transaction Policy",
+                "id": "policy-genesis-transaction-linkid",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-transaction-linkid",
+                  "name": "Genesis Transaction Policy",
+                  "description": "Genesis policy for transactions.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.link-id"
+                    },
+                    {
+                      "class": "condition.immutable"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-7",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "policy-deposit",
+                "id": "policy-deposit-transactionid",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-deposit-transactionid",
+                  "name": "policy-deposit",
+                  "description": "Validates the Deposit object.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "deposit"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.transaction_id",
+                      "params": [
+                        {
+                          "key": "path",
+                          "value": "deposit"
+                        },
+                        {
+                          "key": "destination",
+                          "value": "this_safe"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-6",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Immutable-Vote Policy",
+                "id": "policy-genesis-vote-execution",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-vote-execution",
+                  "name": "Genesis Immutable-Vote Policy",
+                  "description": "Genesis policy for Vote objects. Allowed with no voting.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "vote"
+                    },
+                    {
+                      "key": "class",
+                      "value": "execution"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "0"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    },
+                    {
+                      "class": "condition.immutable"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-5",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Profile Policy",
+                "id": "policy-profile",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-profile",
+                  "name": "Genesis Profile Policy",
+                  "description": "Allows creation of profile objects with 0% voting.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "profile"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": "0"
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": "true"
+                        }
+                      ]
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-4",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Valid Dependencies of Pbject Policy",
+                "id": "policy-valid-dependencies-of-object",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-valid-dependencies-of-object",
+                  "name": "Genesis Valid Dependencies of Pbject Policy",
+                  "description": "Approve if all objects' dependencies are valid objects.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "group"
+                    },
+                    {
+                      "key": "class",
+                      "value": "policy"
+                    },
+                    {
+                      "key": "class",
+                      "value": "user"
+                    },
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "execution"
+                    },
+                    {
+                      "key": "class",
+                      "value": "profile"
+                    },
+                    {
+                      "key": "class",
+                      "value": "deposit"
+                    },
+                    {
+                      "key": "class",
+                      "value": "vote"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.dependencies"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-3",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Genesis Create By User in Group Policy",
+                "id": "policy-genesis-create_by_user_in_group",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "policy-genesis-create_by_user_in_group",
+                  "name": "Genesis Create By User in Group Policy",
+                  "description": "Approve only objects that where created by valid user of the group.",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "group"
+                    },
+                    {
+                      "key": "class",
+                      "value": "policy"
+                    },
+                    {
+                      "key": "class",
+                      "value": "user"
+                    },
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "pending_transaction"
+                    },
+                    {
+                      "key": "class",
+                      "value": "execution"
+                    },
+                    {
+                      "key": "class",
+                      "value": "profile"
+                    }
+                  ],
+                  "parentGroup": "Primary",
+                  "mandatory": "true",
+                  "conditions": [
+                    {
+                      "class": "condition.create_by_user_ingroup"
+                    }
+                  ],
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-1",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000"
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "Large Transaction Approval",
+                "id": "cb691d75-3cce-46de-ac38-243f370b8912",
+                "isValid": false,
+                "isDeleted": true,
+                "class": "policy",
+                "object": {
+                  "class": "policy",
+                  "id": "cb691d75-3cce-46de-ac38-243f370b8912",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "originalObjectSIG": "9DBC02E5D1B44EA6ABA78E1AA6A2397F1098106A56C4578CA41EDEEBAC24903D",
+                  "applyOn": [
+                    {
+                      "key": "class",
+                      "value": "transaction"
+                    }
+                  ],
+                  "conditions": [
+                    {
+                      "class": "condition.voting",
+                      "id": "bd506103-2dac-4977-a460-d16c68678199",
+                      "name": "Vote condition",
+                      "params": [
+                        {
+                          "key": "qty",
+                          "value": 50
+                        },
+                        {
+                          "key": "isPercentage",
+                          "value": true
+                        }
+                      ]
+                    },
+                    {
+                      "class": "condition.amount",
+                      "id": "275ba708-7761-4f1a-a515-cf6e475c74d6",
+                      "name": "Amount condition",
+                      "params": [
+                        {
+                          "key": "min",
+                          "value": 10
+                        },
+                        {
+                          "key": "max",
+                          "value": 999999999
+                        }
+                      ]
+                    }
+                  ],
+                  "name": "Large Transaction Approval",
+                  "description": "Requires 50% approval for transactions over $10",
+                  "SIGNATURE": "56EDC3DF0DB7E0E5929E3C91022DB4DFD764157D44DD2669003F517E2C9A63F1",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18609752",
+                  "timestamp": "1779107426000",
+                  "last_modified": "1779108258000",
+                  "affected_by": [
+                    "9DBC02E5D1B44EA6ABA78E1AA6A2397F1098106A56C4578CA41EDEEBAC24903D",
+                    "C35FF129B6044F7EF49B0809EA1E640BD80EFC04F1E5B11B7781998F7A0A3DDD"
+                  ],
+                  "pending_objects": []
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              }
+            ],
+            "nestedUsers": [
+              {
+                "name": "undefined",
+                "id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "user",
+                "object": {
+                  "class": "user",
+                  "id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                  "parentGroup": "Primary",
+                  "public_key": [
+                    "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                  ],
+                  "link": {
+                    "id": "##public_key",
+                    "name": "profileLink",
+                    "safe_id": "##public_key",
+                    "link_parameter": [
+                      "profile",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "link_data": [
+                      "params",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "merge": "true"
+                  },
+                  "SIGNATURE": "5F6CFABCA28D50A41251A66B2B8CD732606585CBD9AEB5CD9D329F68FC01F495-2",
+                  "source": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18560794",
+                  "timestamp": "1778845454000",
+                  "profile": [
+                    {
+                      "key": "user_name",
+                      "value": "wally.a"
+                    }
+                  ],
+                  "safes": [
+                    {
+                      "safe_address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "source_profile": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                    }
+                  ],
+                  "update_user_address_slot": ""
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 0,
+                          "yes": 0,
+                          "no": 0
+                        },
+                        {
+                          "message": "Approved. First User. yesVotersCounter=0 NumOfUsers= 0% Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "1b95e3e7-ca38-4446-8426-e3b8176679aa",
+                "isValid": false,
+                "isDeleted": true,
+                "class": "user",
+                "object": {
+                  "class": "user",
+                  "id": "1b95e3e7-ca38-4446-8426-e3b8176679aa",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "public_key": [
+                    "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                  ],
+                  "link": {
+                    "id": "##public_key",
+                    "name": "profileLink",
+                    "safe_id": "##public_key",
+                    "link_parameter": [
+                      "profile",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "link_data": [
+                      "params",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "merge": "true"
+                  },
+                  "SIGNATURE": "38C5F7A0C8B938311A6A4DB1C6839ECF388F00B7D2620A7B969926F828993156",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18611282",
+                  "timestamp": "1779115262000",
+                  "profile": [
+                    {
+                      "key": "user_name",
+                      "value": "Tsing"
+                    }
+                  ],
+                  "safes": [
+                    {
+                      "safe_address": "omnistar1zqhqcwpe6tqypdz9shedsvcarql53q98ukt0mf",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    },
+                    {
+                      "safe_address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    }
+                  ],
+                  "update_user_address_slot": "",
+                  "withdraw_counter": 0,
+                  "withdraw": [],
+                  "affected_by": [
+                    "8099D801CBA108BD98CE5C44492A9766262B95A6ED4B28613E6357BCD6FE41FE"
+                  ],
+                  "last_modified": "1779116461000",
+                  "pending_objects": []
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              },
+              {
+                "name": "undefined",
+                "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                "isValid": true,
+                "isDeleted": false,
+                "class": "user",
+                "object": {
+                  "class": "user",
+                  "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                  "parentGroup": "Primary",
+                  "execute": true,
+                  "public_key": [
+                    "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                  ],
+                  "link": {
+                    "id": "##public_key",
+                    "name": "profileLink",
+                    "safe_id": "##public_key",
+                    "link_parameter": [
+                      "profile",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "link_data": [
+                      "params",
+                      "safes",
+                      "public_key",
+                      "update_user_address_slot"
+                    ],
+                    "merge": "true"
+                  },
+                  "SIGNATURE": "41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686",
+                  "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                  "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                  "slot": "18611386",
+                  "timestamp": "1779117018000",
+                  "profile": [
+                    {
+                      "key": "user_name",
+                      "value": "Tsing"
+                    }
+                  ],
+                  "safes": [
+                    {
+                      "safe_address": "omnistar1zqhqcwpe6tqypdz9shedsvcarql53q98ukt0mf",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    },
+                    {
+                      "safe_address": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                      "source_profile": "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                    }
+                  ],
+                  "update_user_address_slot": "",
+                  "withdraw_counter": 0,
+                  "withdraw": [],
+                  "pending_objects": [
+                    {
+                      "name": "undefined",
+                      "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                      "isValid": false,
+                      "isDeleted": false,
+                      "class": "policy",
+                      "object": {
+                        "class": "policy",
+                        "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                        "parentGroup": "Primary",
+                        "execute": true,
+                        "originalObjectSIG": "41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686",
+                        "applyFunction": {
+                          "functionName": "deleteObject"
+                        },
+                        "SIGNATURE": "A30351C40EAC22AC56A352E25F79736E88165DCC1C61B42F03EDED0E26326FC3",
+                        "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                        "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                        "slot": "18611676",
+                        "timestamp": "1779118574000"
+                      },
+                      "process": {
+                        "currentPhase": {
+                          "index": "2",
+                          "name": "In Validation Process",
+                          "description": "The object is being validated.",
+                          "data": [
+                            [
+                              {
+                                "policyID": "policy-genesis-create_by_user_in_group",
+                                "policy-mandatory": "true",
+                                "policy-group": "Primary",
+                                "conditionStatus": "1",
+                                "conditionClass": "condition.create_by_user_ingroup"
+                              },
+                              {
+                                "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                                "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "userGroup": "Primary"
+                              },
+                              {
+                                "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                              }
+                            ],
+                            [
+                              {
+                                "policyID": "policy-genesis",
+                                "policy-mandatory": "undefined",
+                                "policy-group": "Primary",
+                                "conditionStatus": "4",
+                                "conditionClass": "condition.voting"
+                              },
+                              {
+                                "user": [
+                                  "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                                ],
+                                "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "user": [
+                                  "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                                ],
+                                "user_id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "group": "Primary",
+                                "members": 2,
+                                "yes": 0,
+                                "no": 0
+                              },
+                              {
+                                "message": "In Process. Not all users voted. votersCounter=0 groupUsers=2 for group: Primary"
+                              }
+                            ]
+                          ],
+                          "errors": ""
+                        }
+                      }
+                    },
+                    {
+                      "name": "undefined",
+                      "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                      "isValid": false,
+                      "isDeleted": false,
+                      "class": "policy",
+                      "object": {
+                        "class": "policy",
+                        "id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                        "parentGroup": "Primary",
+                        "execute": true,
+                        "originalObjectSIG": "41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686",
+                        "applyFunction": {
+                          "functionName": "deleteObject"
+                        },
+                        "SIGNATURE": "47AF9BED492DA5CA86CAEBB374B192D3F66F2CA61EA4BA27D2C9D0E1DEC042FA",
+                        "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                        "destination": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                        "slot": "18770256",
+                        "timestamp": "1779969051000"
+                      },
+                      "process": {
+                        "currentPhase": {
+                          "index": "2",
+                          "name": "In Validation Process",
+                          "description": "The object is being validated.",
+                          "data": [
+                            [
+                              {
+                                "policyID": "policy-genesis-create_by_user_in_group",
+                                "policy-mandatory": "true",
+                                "policy-group": "Primary",
+                                "conditionStatus": "1",
+                                "conditionClass": "condition.create_by_user_ingroup"
+                              },
+                              {
+                                "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                                "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                                "userGroup": "Primary"
+                              },
+                              {
+                                "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                              }
+                            ],
+                            [
+                              {
+                                "policyID": "policy-genesis",
+                                "policy-mandatory": "undefined",
+                                "policy-group": "Primary",
+                                "conditionStatus": "4",
+                                "conditionClass": "condition.voting"
+                              },
+                              {
+                                "user": [
+                                  "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                                ],
+                                "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "user": [
+                                  "omnistar1jhlnjgex4359g4acrae9s7hczf4lkvca8ry8d0"
+                                ],
+                                "user_id": "a6c3dccb-bfe5-4f08-835b-72437b3bf4da",
+                                "group": "Primary",
+                                "vote": "No Vote For User",
+                                "voteSIGNATURE": "",
+                                "nestedUsers": 2,
+                                "nestedVotes": 0,
+                                "nestedPolicies": 3
+                              },
+                              {
+                                "group": "Primary",
+                                "members": 2,
+                                "yes": 0,
+                                "no": 0
+                              },
+                              {
+                                "message": "In Process. Not all users voted. votersCounter=0 groupUsers=2 for group: Primary"
+                              }
+                            ]
+                          ],
+                          "errors": ""
+                        }
+                      }
+                    }
+                  ]
+                },
+                "process": {
+                  "currentPhase": {
+                    "index": "3",
+                    "name": "Validatad",
+                    "description": "The object finished the validation Process.",
+                    "data": [
+                      [
+                        {
+                          "policyID": "policy-genesis-create_by_user_in_group",
+                          "policy-mandatory": "true",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.create_by_user_ingroup"
+                        },
+                        {
+                          "source": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "safe": "omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2",
+                          "user": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4",
+                          "userGroup": "Primary"
+                        },
+                        {
+                          "message": "Approved. Object created by user (omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4) in group (Primary)"
+                        }
+                      ],
+                      [
+                        {
+                          "policyID": "policy-genesis",
+                          "policy-mandatory": "undefined",
+                          "policy-group": "Primary",
+                          "conditionStatus": "1",
+                          "conditionClass": "condition.voting"
+                        },
+                        {
+                          "user": [
+                            "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4"
+                          ],
+                          "user_id": "omnistar1e27zadsdt7y0cl7zj95d2n7d7a0ygexkvdhqf4-Primary",
+                          "group": "Primary",
+                          "vote": "YES",
+                          "voteSIGNATURE": "Only User in Group. Approved Automatically"
+                        },
+                        {
+                          "group": "Primary",
+                          "members": 1,
+                          "yes": "1",
+                          "no": "0"
+                        },
+                        {
+                          "message": "Approved. One user in group.for group: Primary Required: 100"
+                        }
+                      ]
+                    ],
+                    "errors": ""
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

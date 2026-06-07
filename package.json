@@ -1,0 +1,42 @@
+{
+  "name": "wikey-wallet-mcp",
+  "version": "1.0.0",
+  "description": "Wikey Wallet MCP — a self-hosted, zero-custody MCP stdio server that exposes the Omnistar wallet/signing stack to a client's own agent through a typed, enforceable tool boundary.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Wikey",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/bit2safe/wikey-wallet-mcp.git"
+  },
+  "bin": {
+    "wikey-wallet-mcp": "dist/mcp-server.js"
+  },
+  "main": "dist/core/index.js",
+  "exports": {
+    ".": "./dist/core/index.js",
+    "./mcp-server": "./dist/mcp-server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "tsc --noEmit && node --test --import tsx \"tests/**/*.test.ts\"",
+    "doctor": "node dist/mcp-server.js doctor"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/node": "^22",
+    "tsx": "^4"
+  }
+}
