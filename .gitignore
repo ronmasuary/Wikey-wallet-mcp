@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tgz
+.ssp-nonce
+*.log
+.DS_Store
+
+# Install script carries the GitLab deploy token — bundled with the package at
+# distribution time, never committed to this open-source repo.
+install-child-mode.cjs
