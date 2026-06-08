@@ -8,8 +8,9 @@
 // hardcode a single absolute path the way the skill did — the installer owns
 // placement and we discover it.
 
+import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, readFileSync, existsSync } from 'node:fs';
+import { accessSync, constants, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -78,12 +79,24 @@ export function resolveBins(): ResolvedBins {
 
 // ─── KEK policy (H4) ──────────────────────────────────────────────────────────
 //
-// Always `-keystore secure`. Prefer a hardware-backed KEK (`-kek-provider auto`
-// picks Keychain/TPM/DPAPI/Secure-Enclave where present). On an enclave-less VM,
-// a persisted env/passphrase KEK is an *allowed* fallback so the at-rest signing
-// key survives an agent restart — losing it every restart is worse. The KEK
-// never reaches the model regardless of provider; it lives inside SSP. We only
-// surface *which* provider is active (via `doctor`).
+// Always `-keystore secure`. The active provider is chosen by the `isDevEnv`
+// flag in the MCP's environment (set via the host's mcp.json `env` block):
+//
+//   - isDevEnv truthy  → DEV: a software KEK persisted to `dev.kek`. We generate
+//     one on first use and reuse it, so the at-rest signing keystore survives a
+//     container/agent restart (losing it every restart is worse, and an
+//     enclave-less VM has no hardware provider to fall back on).
+//   - isDevEnv unset/false → PROD: hardware-preferred (`-kek-provider auto` picks
+//     Keychain/TPM/DPAPI/Secure-Enclave). No file is written or read.
+//
+// The KEK never reaches the model regardless of provider; it lives inside SSP.
+// We only surface *which* provider is active (via `doctor`).
+
+/** Whether the MCP is running in a dev environment (env-flag driven). */
+export function isDevEnv(): boolean {
+  const v = process.env.isDevEnv ?? process.env.WIKEY_IS_DEV_ENV;
+  return v === 'true' || v === '1';
+}
 
 export interface KekPolicy {
   /** 'auto' = hardware-preferred; 'env' = persisted software fallback. */
@@ -101,22 +114,36 @@ function devKekPath(): string {
 }
 
 export function resolveKekPolicy(): KekPolicy {
+  // Prod (default): hardware-preferred provider, no file touched.
+  if (!isDevEnv()) {
+    return { provider: 'auto', flags: ['-kek-provider', 'auto'], env: {}, devKekPresent: false };
+  }
+
+  // Dev: read the persisted software KEK, generating + writing it on first use so
+  // the at-rest keystore survives a restart.
   const kekFile = devKekPath();
+  let material = '';
   if (existsSync(kekFile)) {
-    let material = '';
     try {
       material = readFileSync(kekFile, 'utf8').trim();
     } catch {
       material = '';
     }
-    if (material) {
-      return {
-        provider: 'env',
-        flags: ['-kek-provider', 'env'],
-        env: { SSP_KEK: material },
-        devKekPresent: true,
-      };
+  }
+  if (!material) {
+    material = randomBytes(32).toString('base64');
+    try {
+      mkdirSync(path.dirname(kekFile), { recursive: true });
+      writeFileSync(kekFile, material, { mode: 0o600 });
+    } catch {
+      // Can't persist (read-only fs): fall back to a one-shot in-memory KEK for
+      // this run — still a valid dev KEK, just not restart-stable.
     }
   }
-  return { provider: 'auto', flags: ['-kek-provider', 'auto'], env: {}, devKekPresent: false };
+  return {
+    provider: 'env',
+    flags: ['-kek-provider', 'env'],
+    env: { SSP_KEK: material },
+    devKekPresent: true,
+  };
 }
