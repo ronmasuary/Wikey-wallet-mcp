@@ -11,12 +11,30 @@
 // JSON-RPC channel and must never be polluted.
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveBins, type ResolvedBins } from './binPaths.js';
+
+/**
+ * Explicit local install-script path from the MCP env. The product interface is
+ * `installationScriptPath`; `WIKEY_INSTALL_SCRIPT` is the legacy alias.
+ */
+function installScriptPathOverride(): string | undefined {
+  return process.env.installationScriptPath ?? process.env.WIKEY_INSTALL_SCRIPT;
+}
+
+/**
+ * Install-script download URL from the MCP env. Product interface is
+ * `installationScriptUrl`; `WIKEY_INSTALL_SCRIPT_URL` is the legacy alias.
+ */
+function installScriptUrl(): string | undefined {
+  return process.env.installationScriptUrl ?? process.env.WIKEY_INSTALL_SCRIPT_URL;
+}
 
 /**
  * The install script bundled with the package itself (the MCP server owns it).
@@ -34,17 +52,71 @@ export function defaultInstallScriptPath(): string {
 }
 
 /**
- * Locate the install script: explicit WIKEY_INSTALL_SCRIPT override, then the
- * package-bundled script, then the ~/.ssp fallback. Returns the path only if
- * the file exists, else null.
+ * Locate the install script LOCALLY (no network): the explicit
+ * `installationScriptPath` override, then the package-bundled script, then the
+ * `~/.ssp` fallback. Returns the path only if the file exists, else null.
+ * Network download (installationScriptUrl) is handled by `resolveInstallScript`.
  */
 export function locateInstallScript(): string | null {
-  const fromEnv = process.env.WIKEY_INSTALL_SCRIPT;
-  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  const override = installScriptPathOverride();
+  if (override && existsSync(override)) return override;
   const bundled = bundledInstallScriptPath();
   if (existsSync(bundled)) return bundled;
   const fallback = defaultInstallScriptPath();
   if (existsSync(fallback)) return fallback;
+  return null;
+}
+
+/**
+ * Download the install script from `url` to the `~/.ssp` cache path (so a later
+ * run finds it locally) and return that path. Follows redirects. The body is a
+ * Node CJS script run via `node <path>` — no execute bit needed.
+ */
+export function downloadInstallScript(url: string): Promise<string> {
+  const dest = defaultInstallScriptPath();
+  mkdirSync(path.dirname(dest), { recursive: true });
+  process.stderr.write(`[wikey-wallet-mcp] downloading install script: ${url}\n`);
+
+  const fetchTo = (u: string, redirectsLeft: number): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const mod = u.startsWith('http://') ? http : https;
+      const req = mod.get(u, (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400 && res.headers.location) {
+          res.resume();
+          if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
+          const next = new URL(res.headers.location, u).toString();
+          return fetchTo(next, redirectsLeft - 1).then(resolve, reject);
+        }
+        if (status !== 200) {
+          res.resume();
+          return reject(new Error(`HTTP ${status} for ${u}`));
+        }
+        const file = createWriteStream(dest);
+        res.pipe(file);
+        file.on('finish', () => file.close((err) => (err ? reject(err) : resolve())));
+        file.on('error', (err) => {
+          try { unlinkSync(dest); } catch { /* best effort */ }
+          reject(err);
+        });
+      });
+      req.on('error', reject);
+    });
+
+  return fetchTo(url, 5).then(() => dest);
+}
+
+/**
+ * Resolve the install script with the product precedence: a LOCAL file first
+ * (`installationScriptPath` → bundled → `~/.ssp`), then a download from
+ * `installationScriptUrl`. Returns null when neither a local file nor a URL is
+ * available (→ no install will be attempted).
+ */
+export async function resolveInstallScript(): Promise<string | null> {
+  const local = locateInstallScript();
+  if (local) return local;
+  const url = installScriptUrl();
+  if (url) return downloadInstallScript(url);
   return null;
 }
 
@@ -62,11 +134,13 @@ function missingList(bins: ResolvedBins): string[] {
 
 /** Where we looked for the install script, for actionable errors. */
 function lookedAt(): string {
-  const env = process.env.WIKEY_INSTALL_SCRIPT;
+  const override = installScriptPathOverride();
+  const url = installScriptUrl();
   return [
-    env ? `WIKEY_INSTALL_SCRIPT=${env}` : 'WIKEY_INSTALL_SCRIPT (unset)',
+    override ? `installationScriptPath=${override}` : 'installationScriptPath (unset)',
     bundledInstallScriptPath(),
     defaultInstallScriptPath(),
+    url ? `installationScriptUrl=${url}` : 'installationScriptUrl (unset)',
   ].join('; ');
 }
 
@@ -93,9 +167,8 @@ export class InstallScriptMissingError extends Error {
     super(
       `wikey-wallet-mcp: required binaries are missing and no install script was found.\n` +
         `Looked at: ${lookedAt()}\n` +
-        `Set WIKEY_INSTALL_SCRIPT to the path of install-child-mode.cjs, or place it at ` +
-        `${defaultInstallScriptPath()}.\n` +
-        `(A public download link for the install script is planned; v1 uses the env var + local fallback.)`,
+        `Set installationScriptPath to the path of install-child-mode.cjs (or place it at ` +
+        `${defaultInstallScriptPath()}), or set installationScriptUrl to a download link for it.`,
     );
     this.name = 'InstallScriptMissingError';
   }
@@ -110,7 +183,7 @@ export async function ensureBinaries(): Promise<ResolvedBins> {
   let bins = resolveBins();
   if (binsComplete(bins)) return bins;
 
-  const script = locateInstallScript();
+  const script = await resolveInstallScript();
   if (!script) throw new InstallScriptMissingError();
 
   process.stderr.write(
