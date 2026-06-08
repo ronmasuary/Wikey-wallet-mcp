@@ -46,7 +46,9 @@ Add it to your MCP host config (generic `mcp.json`-style):
       "command": "npx",
       "args": ["-y", "wikey-wallet-mcp"],
       "env": {
-        "WIKEY_INSTALL_SCRIPT": "/path/to/install-child-mode.cjs"
+        "isDevEnv": "true",
+        "installationScriptPath": "/path/to/install-child-mode.cjs",
+        "installationScriptUrl": "https://example.com/install-child-mode.cjs"
       }
     }
   }
@@ -56,6 +58,21 @@ Add it to your MCP host config (generic `mcp.json`-style):
 Any MCP host works (Claude Desktop, IDE extensions, custom clients) — point its
 server config at `npx wikey-wallet-mcp` (or the absolute `dist/mcp-server.js`)
 over stdio.
+
+### Environment flags
+
+All Wikey behavior is driven by the server's own environment (the host's `env`
+block above) — **the MCP host stays generic and needs no Wikey-specific
+knowledge.**
+
+| Flag | Type | Effect |
+| ---- | ---- | ------ |
+| `isDevEnv` | `"true"` / `"1"` | **Dev:** the KEK is a software key persisted to `~/.ssp/dev.kek` — generated on first use, reused across restarts so the at-rest keystore survives. **Unset / false → prod:** hardware-preferred KEK (`-kek-provider auto`), no file written. The KEK never reaches the model either way. |
+| `installationScriptPath` | path | Explicit local path to `install-child-mode.cjs`. |
+| `installationScriptUrl` | URL | Download location for the install script, used only when no local script is found. |
+
+(`WIKEY_IS_DEV_ENV`, `WIKEY_INSTALL_SCRIPT`, `WIKEY_INSTALL_SCRIPT_URL` are
+accepted as legacy aliases.)
 
 ### Binaries & auto-install
 
@@ -68,16 +85,18 @@ The server needs three child binaries on the machine:
 | `wallet-cli`     | npm global bin, then `PATH`            |
 
 On startup the server runs a **preflight**. If any binary is missing it
-**auto-runs an external install script**, located via:
+**auto-runs an external install script**, resolved **local-first, then by URL**:
 
-1. `WIKEY_INSTALL_SCRIPT` env var, then
-2. `~/.ssp/install-child-mode.cjs` (fallback).
+1. `installationScriptPath`, then
+2. the package-bundled script, then
+3. `~/.ssp/install-child-mode.cjs`, then
+4. download from `installationScriptUrl` (cached to `~/.ssp/install-child-mode.cjs`).
 
 The install script is **not** shipped in this repo (it carries a private
-registry token — keeping it out avoids a distribution leak). Place it on the
-machine, or point `WIKEY_INSTALL_SCRIPT` at it. If it's absent, the server fails
-with an actionable message. *(A public download link for the script is planned;
-v1 uses the env var + local fallback.)*
+registry token — keeping it out avoids a distribution leak). Provide it via
+`installationScriptPath`/`installationScriptUrl`, or place it at
+`~/.ssp/install-child-mode.cjs`. If neither a local file nor a URL is available,
+the server fails with an actionable message.
 
 The installer's output is streamed to **stderr only** — stdout is the MCP
 JSON-RPC channel and is never polluted.

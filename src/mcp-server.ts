@@ -23,6 +23,7 @@ import {
   ensureBinaries,
   resolveBins,
   resolveKekPolicy,
+  isDevEnv,
   locateInstallScript,
   runQuery,
   parseSnapshot,
@@ -683,13 +684,15 @@ async function doctor(): Promise<number> {
   for (const [k, v] of Object.entries(versions)) out(`  ${k} version: ${v}`);
 
   const kek = resolveKekPolicy();
-  out(`KEK provider   : ${kek.provider}${kek.provider === 'env' ? ' (persisted software fallback)' : ' (hardware-preferred)'}`);
+  out(`dev env        : ${isDevEnv() ? 'true (isDevEnv set)' : 'false'}`);
+  out(`KEK provider   : ${kek.provider}${kek.provider === 'env' ? ' (dev: persisted software KEK)' : ' (prod: hardware-preferred)'}`);
 
   const loopback = await tcpReachable('127.0.0.1', 8080, 1500);
   out(`loopback 8080  : ${loopback ? 'reachable (SSP appears up)' : 'not reachable (normal when idle — SSP is lazy)'}`);
 
   const script = locateInstallScript();
-  out(`install script : ${script ?? '(not found — set WIKEY_INSTALL_SCRIPT or place at ~/.ssp/install-child-mode.cjs)'}`);
+  const url = process.env.installationScriptUrl ?? process.env.WIKEY_INSTALL_SCRIPT_URL;
+  out(`install script : ${script ?? (url ? `(none local — will download from ${url})` : '(not found — set installationScriptPath or installationScriptUrl)')}`);
 
   const ready = Boolean(bins.signingServer && bins.sspUtil && bins.walletCli);
   out('─'.repeat(40));
