@@ -28,6 +28,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
     "test": "tsc --noEmit && node --test --import tsx \"tests/**/*.test.ts\"",
     "doctor": "node dist/mcp-server.js doctor"
   },
