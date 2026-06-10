@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { resolveKekPolicy, isDevEnv } from '../src/core/binPaths.js';
+import {
+  resolveKekPolicy,
+  isDevEnv,
+  hardwareKekPolicy,
+  softwareKekPolicy,
+  SSP_NO_KEK_MARKER,
+} from '../src/core/binPaths.js';
 
 const KEYS = ['isDevEnv', 'WIKEY_IS_DEV_ENV', 'WIKEY_SSP_DIR'];
 
@@ -87,4 +93,47 @@ test('resolveKekPolicy: dev reuses an existing dev.kek (restart-stable)', () => 
     restoreEnv(prev);
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('hardwareKekPolicy: auto provider, no file written regardless of isDevEnv', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'wmcp-kek-'));
+  const prev = setEnv({ isDevEnv: 'true', WIKEY_SSP_DIR: dir });
+  try {
+    const p = hardwareKekPolicy();
+    assert.equal(p.provider, 'auto');
+    assert.deepEqual(p.flags, ['-kek-provider', 'auto']);
+    assert.deepEqual(p.env, {});
+    assert.equal(existsSync(path.join(dir, 'dev.kek')), false);
+  } finally {
+    restoreEnv(prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('softwareKekPolicy: persists + reuses dev.kek even when isDevEnv is unset (runtime fallback)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'wmcp-kek-'));
+  const kekFile = path.join(dir, 'dev.kek');
+  const prev = setEnv({ isDevEnv: undefined, WIKEY_SSP_DIR: dir });
+  try {
+    const first = softwareKekPolicy();
+    assert.equal(first.provider, 'env');
+    assert.deepEqual(first.flags, ['-kek-provider', 'env']);
+    assert.ok(existsSync(kekFile), 'fallback persists the software KEK');
+    const material = readFileSync(kekFile, 'utf8').trim();
+    assert.equal(first.env.SSP_KEK, material);
+    assert.equal(material.length, 44); // 32 random bytes base64
+
+    const second = softwareKekPolicy();
+    assert.equal(second.env.SSP_KEK, material, 'second call reuses the persisted KEK (restart-stable)');
+  } finally {
+    restoreEnv(prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SSP_NO_KEK_MARKER matches the real SSP error string as a substring', () => {
+  // Real SSP message (main.go:289), abbreviated. A substring match must hit.
+  const real =
+    'no usable KEK provider in -spawned-by-agent mode: no hardware-backed provider (sgx/tpm/keychain/dpapi) is available';
+  assert.ok(real.includes(SSP_NO_KEK_MARKER));
 });

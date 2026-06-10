@@ -46,11 +46,36 @@ both restart at 0) and kept across rotations (monotonic).
 
 ### Keys-at-rest KEK (H4)
 
-Always `-keystore secure`. Hardware-preferred (`-kek-provider auto` picks
-Keychain/TPM/DPAPI/Secure-Enclave). On enclave-less VMs a persisted
-env/passphrase KEK is an allowed fallback so the at-rest signing key survives an
-agent restart. The KEK never reaches the model regardless of provider; `doctor`
-surfaces which provider is active.
+Always `-keystore secure`. The MCP tries **hardware first** (`-kek-provider auto`
+picks Keychain/TPM/DPAPI/Secure-Enclave). If SSP reports *no usable KEK provider*
+at boot (enclave-less container, `SSP_KEK` unset), the MCP **falls back once** to
+a persisted software KEK (`env` provider + a `dev.kek` 32-byte base64 key under
+the state root) so the at-rest signing key survives a restart instead of being
+lost. The downgrade is **fail-closed-then-warn**: it is logged to stderr and
+surfaced via `session_status` (`kekProvider`/`kekFallback`) and `doctor`, so an
+operator on real-prod hardware notices a transiently-missing enclave rather than
+silently losing at-rest protection. `isDevEnv` remains an explicit *force-
+software* override. A non-KEK boot failure is surfaced as-is and never triggers
+the fallback. The KEK never reaches the model regardless of provider.
+
+**Pre-existing keystores under an ephemeral KEK are unrecoverable** — those keys
+were encrypted under a throwaway KEK that no longer exists; the fallback fixes
+the problem going forward but cannot decrypt them. Mint fresh keys.
+
+### Single state root (P2 — no default-key desync)
+
+All persistent wallet state lives under **one root** (`WIKEY_SSP_DIR`, default
+`~/.ssp`): the SSP keystore (`-keystore-dir <root>/keystore`), `dev.kek`, the
+child binaries, and — crucially — wallet-cli's config (`<root>/.wallet-cli`,
+reached by pinning `HOME=<root>` on every wallet-cli child). The **key material**
+and the **"which key is default" pointer** (`user.address`/`user.pubkey`) thus
+co-locate on one volume and survive a restart together, so they can never desync
+into "pubkey does not match signer address". The config is seeded on first run
+only (`signer.url` pinned to `http://127.0.0.1:8080`); an existing pointer is
+never clobbered. This internal co-location uses `HOME`, never `config set user.*`,
+so the tool-boundary config lock is preserved. An operator makes the stack
+restart-stable with **one volume** on the root; the agent's `mcp.json` stays
+bare (`{ "command": "wikey-wallet-mcp" }`).
 
 ### Transport enforcement & config lockdown (H10)
 

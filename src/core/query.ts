@@ -13,6 +13,8 @@ export interface RunQueryOpts {
   timeoutMs?: number;
   /** A single line written to the child's stdin, then stdin is ended (EOF). */
   input?: string;
+  /** Child env (e.g. HOME pinned to the state root to co-locate config). */
+  env?: NodeJS.ProcessEnv;
 }
 
 export async function runQuery(opts: RunQueryOpts): Promise<string> {
@@ -20,6 +22,7 @@ export async function runQuery(opts: RunQueryOpts): Promise<string> {
     const { stdout } = await execFile(opts.walletCli, opts.args, {
       timeout: opts.timeoutMs ?? 30_000,
       maxBuffer: 64 * 1024 * 1024, // snapshots can be hundreds of KB
+      ...(opts.env ? { env: opts.env } : {}),
     });
     return stdout.trim();
   } catch (e: unknown) {
@@ -45,6 +48,7 @@ export function runWalletCliWithInput(opts: RunQueryOpts): Promise<string> {
     const child = spawn(opts.walletCli, opts.args, {
       // Pipe stdin so we can answer the one confirmation prompt, then EOF.
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...(opts.env ? { env: opts.env } : {}),
     });
     child.stdin.on('error', () => {
       /* child may exit before we finish writing — ignore EPIPE */

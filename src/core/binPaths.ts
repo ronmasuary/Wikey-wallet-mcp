@@ -23,8 +23,38 @@ export interface ResolvedBins {
   walletCli: string | null;
 }
 
+/**
+ * The single MCP-owned state root. ONE volume on this path makes the whole
+ * stack restart-stable: the SSP keystore, dev.kek, the child binaries, AND
+ * wallet-cli's config (the default-key pointer) all live underneath it, so the
+ * key material and the "which key is default" pointer can never desync (P2).
+ * Override with WIKEY_SSP_DIR; defaults to ~/.ssp.
+ */
+export function stateRoot(): string {
+  return process.env.WIKEY_SSP_DIR ?? path.join(os.homedir(), '.ssp');
+}
+
+/** Directory the SSP secure keystore is pinned to (`-keystore-dir`). */
+export function keystoreDir(): string {
+  return path.join(stateRoot(), 'keystore');
+}
+
+/**
+ * HOME we pin on every wallet-cli (and SSP) child so wallet-cli's config loader
+ * (which derives `~/.wallet-cli` from homedir()) writes under the state root
+ * instead of the real home. Co-locates the default-key pointer with the keystore.
+ */
+export function walletHome(): string {
+  return stateRoot();
+}
+
+/** Child env that relocates wallet-cli's config home under the state root. */
+export function walletCliEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, HOME: walletHome() };
+}
+
 function sspBinDir(): string {
-  return path.join(process.env.WIKEY_SSP_DIR ?? path.join(os.homedir(), '.ssp'), 'bin');
+  return path.join(stateRoot(), 'bin');
 }
 
 let npmGlobalBinCache: string | null | undefined;
@@ -109,18 +139,32 @@ export interface KekPolicy {
   devKekPresent: boolean;
 }
 
+/**
+ * Substring SSP emits when, in -spawned-by-agent mode, no hardware-backed KEK
+ * provider is available and no software KEK is configured (main.go:289). SSP
+ * logs this via its slog JSON handler on os.Stdout (main.go:40), NOT stderr —
+ * the session must scan the child's STDOUT for it. We match it as a substring,
+ * so it still hits inside the JSON-escaped `"error":"…"` value.
+ */
+export const SSP_NO_KEK_MARKER = 'no usable KEK provider';
+
 function devKekPath(): string {
-  return path.join(process.env.WIKEY_SSP_DIR ?? path.join(os.homedir(), '.ssp'), 'dev.kek');
+  return path.join(stateRoot(), 'dev.kek');
 }
 
-export function resolveKekPolicy(): KekPolicy {
-  // Prod (default): hardware-preferred provider, no file touched.
-  if (!isDevEnv()) {
-    return { provider: 'auto', flags: ['-kek-provider', 'auto'], env: {}, devKekPresent: false };
-  }
+/** Hardware-preferred policy (prod default): `-kek-provider auto`, no file. */
+export function hardwareKekPolicy(): KekPolicy {
+  return { provider: 'auto', flags: ['-kek-provider', 'auto'], env: {}, devKekPresent: false };
+}
 
-  // Dev: read the persisted software KEK, generating + writing it on first use so
-  // the at-rest keystore survives a restart.
+/**
+ * Persisted software-KEK policy (`-kek-provider env`). Reads the persisted KEK,
+ * generating + writing it (0600) on first use so the at-rest keystore survives a
+ * restart. Used both for explicit dev mode and as the runtime fallback when no
+ * hardware KEK is available. The 32-byte base64 value is exactly what SSP's env
+ * provider expects (kek/env.go).
+ */
+export function softwareKekPolicy(): KekPolicy {
   const kekFile = devKekPath();
   let material = '';
   if (existsSync(kekFile)) {
@@ -137,7 +181,7 @@ export function resolveKekPolicy(): KekPolicy {
       writeFileSync(kekFile, material, { mode: 0o600 });
     } catch {
       // Can't persist (read-only fs): fall back to a one-shot in-memory KEK for
-      // this run — still a valid dev KEK, just not restart-stable.
+      // this run — still a valid software KEK, just not restart-stable.
     }
   }
   return {
@@ -146,4 +190,14 @@ export function resolveKekPolicy(): KekPolicy {
     env: { SSP_KEK: material },
     devKekPresent: true,
   };
+}
+
+/**
+ * The KEK policy to try FIRST. `isDevEnv` forces software (an explicit
+ * force-software override); otherwise hardware-preferred. When hardware reports
+ * no usable KEK at spawn time, the session falls back to softwareKekPolicy()
+ * once (see session.ts doInit).
+ */
+export function resolveKekPolicy(): KekPolicy {
+  return isDevEnv() ? softwareKekPolicy() : hardwareKekPolicy();
 }

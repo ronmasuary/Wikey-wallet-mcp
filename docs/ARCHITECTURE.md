@@ -23,7 +23,7 @@ pipe.
 | `core/rotation.ts`     | `runHmacRotation` + `ssp-util` exit-code table + grace recovery; `mintKey`. |
 | `core/snapshot.ts`     | `parseSnapshot` + resolvers (create-user / delete-user / delete-policy) + types. |
 | `core/snapshotCache.ts`| B2 server-side store: index / query / page, byte-budgeted, last-3 + TTL. |
-| `core/binPaths.ts`     | Resolve `signing-server`/`ssp-util`/`wallet-cli`; KEK policy. |
+| `core/binPaths.ts`     | Resolve `signing-server`/`ssp-util`/`wallet-cli`; KEK policy (hardware→software fallback); single state root (`stateRoot`/`keystoreDir`/`walletHome`/`walletCliEnv`). |
 | `core/installer.ts`    | Locate `WIKEY_INSTALL_SCRIPT` → `~/.ssp` fallback; auto-run on startup. |
 | `core/mutex.ts`        | Async mutex shared by ensureSession + signing + rotation. |
 | `core/redact.ts`       | Defensive secret scrubber for error strings. |
@@ -217,3 +217,51 @@ graph LR
     classDef secret fill:#fff2c0,stroke:#b8860b;
     class CACHE secret;
 ```
+
+## 7. State persistence & KEK fallback
+
+All durable wallet state lives under **one root** — `WIKEY_SSP_DIR`, default
+`~/.ssp`. The SSP keystore, the software KEK (`dev.kek`), the child binaries, and
+wallet-cli's config (the default-key pointer) all derive from it, so a single
+operator volume on the root makes the stack restart-stable and the key material
+can never desync from the "which key is default" pointer. The agent's `mcp.json`
+stays bare; persistence is purely an operator concern.
+
+```
+                          mcp.json = { "command": "wikey-wallet-mcp" }   ← bare
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │ MCP doInit(): try -kek-provider auto (hardware)                       │
+   │        └─ SSP logs "no usable KEK provider" on STDOUT → fall back ONCE│
+   │           to -kek-provider env + SSP_KEK (from dev.kek)               │
+   │                                                                       │
+   │   signing-server  -keystore-dir <root>/keystore        wallet-cli     │
+   │        │                                              HOME=<root>      │
+   │        ▼                                                  │            │
+   │   <root>/keystore/*.enc  (key material)                   ▼            │
+   │                                          <root>/.wallet-cli/config.json│
+   │                                          (user.address/pubkey = default│
+   │                                           pointer; signer.url 127.0.0.1│
+   │  ┌──────── <root> = $WIKEY_SSP_DIR | ~/.ssp ──────────────────────┐   │
+   │  │  bin/   keystore/*.enc   dev.kek   .wallet-cli/config.json      │   │ ← ONE volume
+   │  └────────────────────────────────────────────────────────────────┘  │
+   └─────────────────────────────────────────────────────────────────────┘
+```
+
+```mermaid
+graph TD
+    K{resolveKekPolicy} -->|prod default| HW[try -kek-provider auto / hardware]
+    K -->|isDevEnv force| SW[software KEK]
+    HW -->|SSP STDOUT: no usable KEK provider| SW
+    SW --> DEK[(dev.kek<br/>32-byte base64 SSP_KEK)]
+    M[MCP doInit] -->|spawn -keystore-dir root/keystore + SSP_KEK| SSP[signing-server]
+    M -->|spawn HOME=root + --creator/--pubkey for signingKey| CLI[wallet-cli]
+    SSP --> KS[(root/keystore/*.enc<br/>key material)]
+    CLI --> CFG[(root/.wallet-cli/config.json<br/>default pointer)]
+    DEK --- ROOT[(root = WIKEY_SSP_DIR or ~/.ssp<br/>ONE volume)]
+    KS --- ROOT
+    CFG --- ROOT
+```
+
+A per-call `signingKey` on the signing tools resolves to `--creator/--pubkey`
+(via `keys get`), letting the agent sign with a chosen funded key when the
+default has drifted — without any wallet-cli change.

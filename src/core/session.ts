@@ -17,10 +17,20 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { unlink } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { Mutex } from './mutex.js';
-import { resolveKekPolicy } from './binPaths.js';
+import {
+  resolveKekPolicy,
+  softwareKekPolicy,
+  isDevEnv,
+  SSP_NO_KEK_MARKER,
+  keystoreDir,
+  walletHome,
+  walletCliEnv,
+  type KekPolicy,
+} from './binPaths.js';
 import { mintKey, runHmacRotation } from './rotation.js';
 import { runSigningPrompted, type PromptStep, type PromptedOpts } from './signing.js';
 import { runWalletCliWithInput } from './query.js';
@@ -48,6 +58,20 @@ export interface SessionStatus {
   wedged: boolean;
   lastRotation: number | null;
   state: 'no-session' | 'active' | 'wedged';
+  /** The KEK provider the live SSP child actually came up with (never the key). */
+  kekProvider: 'auto' | 'env' | null;
+  /** True when software KEK was reached via runtime fallback (no hardware). */
+  kekFallback: boolean;
+}
+
+/** Internal: why a spawn attempt failed, for the fallback decision. */
+interface SpawnFailure {
+  /** The child exited before the port became reachable (vs. a probe timeout). */
+  earlyExit: boolean;
+  /** Bounded tail of the child's stdout+stderr (marker-bearing on a KEK fail). */
+  output: string;
+  exitCode?: number | null;
+  cause?: Error;
 }
 
 export class SessionManager {
@@ -67,6 +91,8 @@ export class SessionManager {
   private wedged = false;
   private shuttingDown = false;
   private lastRotation: number | null = null;
+  private effectiveKekProvider: 'auto' | 'env' | null = null;
+  private kekFellBack = false;
 
   constructor(cfg: SessionConfig) {
     this.bins = cfg.bins;
@@ -103,22 +129,39 @@ export class SessionManager {
     }
 
     const key = mintKey();
-    const kek = resolveKekPolicy();
+    let kek = resolveKekPolicy();
+    let fellBack = false;
 
-    const proc = spawn(
-      this.bins.signingServer,
-      ['-spawned-by-agent', ...kek.flags, '-keystore', 'secure'],
-      {
-        env: {
-          ...process.env,
-          SSP_HMAC_KEY: key.toString('utf8'), // env values must be strings; SSP os.Unsetenv's it
-          ...kek.env,
-        },
-        detached: false,
-        stdio: 'ignore',
-      },
-    );
+    let proc: ChildProcess;
+    try {
+      proc = await this.attemptSpawn(kek, key);
+    } catch (e) {
+      const f = e as SpawnFailure;
+      // Fall back to the persisted software KEK once, but ONLY when the primary
+      // was hardware AND SSP reported no usable KEK at boot. SSP logs that marker
+      // to its STDOUT via slog-JSON (main.go:40) — attemptSpawn scans both
+      // streams. A non-KEK early failure (no marker) is surfaced as-is, never
+      // masked by a fallback.
+      if (kek.provider === 'auto' && f.earlyExit && f.output.includes(SSP_NO_KEK_MARKER)) {
+        this.log(
+          '[wikey-wallet-mcp] no hardware KEK; falling back to persisted software KEK (dev.kek).',
+        );
+        kek = softwareKekPolicy();
+        fellBack = !isDevEnv();
+        try {
+          proc = await this.attemptSpawn(kek, key);
+        } catch (e2) {
+          key.fill(0);
+          throw this.spawnFailureToError(e2 as SpawnFailure);
+        }
+      } else {
+        key.fill(0);
+        throw this.spawnFailureToError(f);
+      }
+    }
 
+    // Live: attach lifecycle handlers and drain the pipes (discard) so SSP's
+    // ongoing JSON logging can never fill the pipe buffer and block the child.
     proc.on('error', () => {
       this.child = null;
       if (this.key) {
@@ -127,23 +170,105 @@ export class SessionManager {
       }
     });
     proc.on('exit', () => this.handleChildExit(proc));
-
-    try {
-      await this.probePort();
-    } catch (e) {
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        /* ignore */
-      }
-      key.fill(0);
-      throw e;
-    }
+    proc.stdout?.resume();
+    proc.stderr?.resume();
 
     this.child = proc;
     this.key = key;
+    this.effectiveKekProvider = kek.provider;
+    this.kekFellBack = fellBack;
     this.startRotationTimer();
-    this.log(`[wikey-wallet-mcp] SSP session started (pid ${proc.pid}, kek=${kek.provider}).`);
+    this.log(
+      `[wikey-wallet-mcp] SSP session started (pid ${proc.pid}, kek=${kek.provider}` +
+        `${fellBack ? ', software fallback — no hardware enclave' : ''}).`,
+    );
+  }
+
+  /**
+   * Spawn signing-server with the given KEK policy and resolve once the port is
+   * reachable. Captures a bounded tail of the child's stdout+stderr; rejects with
+   * a SpawnFailure that flags whether the child exited early (vs. a probe
+   * timeout) and carries the captured output for marker scanning + diagnostics.
+   * On resolve, the capture/diagnostic listeners are removed and ownership of the
+   * live pipes passes to doInit (which drains them).
+   */
+  private attemptSpawn(kek: KekPolicy, key: Buffer): Promise<ChildProcess> {
+    const ksDir = keystoreDir();
+    try {
+      mkdirSync(ksDir, { recursive: true });
+    } catch {
+      /* best effort; SSP will error if it truly can't write and we surface it */
+    }
+    return new Promise<ChildProcess>((resolve, reject) => {
+      const proc = spawn(
+        this.bins.signingServer,
+        ['-spawned-by-agent', ...kek.flags, '-keystore', 'secure', '-keystore-dir', ksDir],
+        {
+          env: {
+            ...process.env,
+            HOME: walletHome(), // symmetry with wallet-cli; keeps any HOME-derived paths under the root
+            SSP_HMAC_KEY: key.toString('utf8'), // env values must be strings; SSP os.Unsetenv's it
+            ...kek.env,
+          },
+          detached: false,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+
+      let output = '';
+      const capture = (c: Buffer) => {
+        output = (output + c.toString()).slice(-2048); // bounded ring (~2 KB)
+      };
+      proc.stdout?.on('data', capture);
+      proc.stderr?.on('data', capture);
+
+      let settled = false;
+      const removeBringupListeners = () => {
+        proc.stdout?.removeListener('data', capture);
+        proc.stderr?.removeListener('data', capture);
+        proc.removeListener('error', onError);
+        proc.removeListener('exit', onExit);
+      };
+      const onError = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        removeBringupListeners();
+        reject({ earlyExit: false, output, cause: err } as SpawnFailure);
+      };
+      const onExit = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        removeBringupListeners();
+        reject({ earlyExit: true, output, exitCode: code } as SpawnFailure);
+      };
+      proc.on('error', onError);
+      proc.on('exit', onExit);
+
+      this.probePort()
+        .then(() => {
+          if (settled) return;
+          settled = true;
+          removeBringupListeners();
+          resolve(proc);
+        })
+        .catch((probeErr: Error) => {
+          if (settled) return;
+          settled = true;
+          removeBringupListeners();
+          try {
+            proc.kill('SIGTERM'); // probe timed out with no exit — reap it
+          } catch {
+            /* ignore */
+          }
+          reject({ earlyExit: false, output, cause: probeErr } as SpawnFailure);
+        });
+    });
+  }
+
+  private spawnFailureToError(f: SpawnFailure): Error {
+    const base = f.cause?.message ?? `signing-server exited (code ${f.exitCode ?? '?'})`;
+    const tail = f.output.trim();
+    return new Error(tail ? `${base}\n${tail.slice(-500)}` : base);
   }
 
   private probePort(): Promise<void> {
@@ -201,6 +326,7 @@ export class SessionManager {
         key: this.key,
         args,
         queue,
+        env: walletCliEnv(), // co-locate wallet-cli config under the state root
         ...(opts ? { opts } : {}),
       });
     });
@@ -220,6 +346,7 @@ export class SessionManager {
       return runWalletCliWithInput({
         walletCli: this.bins.walletCli,
         args,
+        env: walletCliEnv(), // co-locate wallet-cli config under the state root
         ...(opts.input !== undefined ? { input: opts.input } : {}),
         ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
@@ -280,6 +407,8 @@ export class SessionManager {
       wedged: this.wedged,
       lastRotation: this.lastRotation,
       state: this.wedged ? 'wedged' : active ? 'active' : 'no-session',
+      kekProvider: active ? this.effectiveKekProvider : null,
+      kekFallback: active ? this.kekFellBack : false,
     };
   }
 

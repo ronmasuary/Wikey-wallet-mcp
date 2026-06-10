@@ -26,6 +26,10 @@ import {
   isDevEnv,
   locateInstallScript,
   runQuery,
+  walletCliEnv,
+  walletHome,
+  stateRoot,
+  keystoreDir,
   parseSnapshot,
   findSafe,
   extractGroupsFromSafe,
@@ -33,6 +37,7 @@ import {
   resolveUserDeletion,
   resolvePolicyDeletion,
   extractUsernameFromProfile,
+  resolveSignerArgs,
   buildPolicyQueue,
   buildEditHelpersQueue,
   assertConfigSetAllowed,
@@ -41,6 +46,8 @@ import {
   type QueryFilter,
 } from './core/index.js';
 import { createConnection } from 'node:net';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { createRequireResolveVersion } from './version.js';
 
 const SERVER_NAME = 'wikey-wallet-mcp';
@@ -51,6 +58,15 @@ const SERVER_VERSION = createRequireResolveVersion();
 // wallet_hmac_rotate (automatic); KEEP read-only wallet_session_status; ADD B2's
 // wallet_snapshot (index-only), wallet_snapshot_query, wallet_snapshot_page.
 // wallet_snapshot is redefined: it returns the small index, NEVER raw JSON.
+
+// Optional per-call signer override, shared by every signing tool that maps to a
+// dynamic wallet-cli `tx` subcommand (all of them except `tx send`, which uses
+// --from). Resolves to `--creator <addr> --pubkey <b64>`; omitted → config default.
+const SIGNING_KEY_PROP = {
+  type: 'string',
+  description:
+    'Optional omnistar1… key address to sign with. Omit to use the configured default key. Use to sign with a specific funded key when the default has drifted.',
+} as const;
 
 const tools = [
   // ── Query tools ──
@@ -230,7 +246,7 @@ const tools = [
   {
     name: 'wallet_session_status',
     description:
-      'Check the secure SSP session state. Returns { active, pid, wedged, lastRotation, state } — never any key material. The session starts automatically on the first signing call and the HMAC key auto-rotates; there is no manual start or rotate.',
+      'Check the secure SSP session state. Returns { active, pid, wedged, lastRotation, state, kekProvider, kekFallback } — never any key material. kekProvider is the keys-at-rest provider the live signer came up with (auto=hardware, env=software); kekFallback is true when software was reached because no hardware enclave was found. The session starts automatically on the first signing call and the HMAC key auto-rotates; there is no manual start or rotate.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   // ── Signing tools ──
@@ -244,6 +260,7 @@ const tools = [
           type: 'string',
           description: 'Safe username (letters, numbers, dots only; no leading/trailing/consecutive dots)',
         },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['username'],
     },
@@ -276,6 +293,7 @@ const tools = [
         tokenAddress: { type: 'string', description: 'ERC20 contract address (0x + 40 hex) — required for ERC20 assets' },
         chain: { type: 'string', enum: ['ethereum', 'polygon', 'base'], description: 'ERC20 chain — required for ERC20 assets' },
         smallCoin: { type: 'number', description: 'ERC20 token divisor — required for ERC20 assets' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'to', 'amount', 'asset', 'feePriority'],
     },
@@ -290,6 +308,7 @@ const tools = [
         destination: { type: 'string', description: 'Safe address (omnistar1...)' },
         vote: { type: 'string', enum: ['YES', 'NO'] },
         signature: { type: 'string', description: 'Omnistar tx hash of the object being voted on' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'vote', 'signature'],
     },
@@ -306,6 +325,7 @@ const tools = [
           type: 'string',
           description: 'omnistar1... address of the account being recovered; the server resolves the username via query profile',
         },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: [],
     },
@@ -318,6 +338,7 @@ const tools = [
       properties: {
         oldaccount: { type: 'string', description: 'Original account username being recovered' },
         newaccount: { type: 'string', description: 'New omnistar1... address replacing the old one' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['oldaccount', 'newaccount'],
     },
@@ -351,6 +372,7 @@ const tools = [
         },
         name: { type: 'string', description: 'Policy name (optional)' },
         description: { type: 'string', description: 'Policy description (optional)' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'applyOn', 'conditions'],
     },
@@ -383,6 +405,7 @@ const tools = [
         },
         name: { type: 'string', description: 'Policy name (optional, for non-transaction-only applyOn)' },
         description: { type: 'string', description: 'Policy description (optional, for non-transaction-only applyOn)' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'policyId', 'signature', 'applyOn', 'conditions'],
     },
@@ -396,6 +419,7 @@ const tools = [
       properties: {
         destination: { type: 'string', description: 'Safe address (omnistar1...)' },
         policyId: { type: 'string', description: "Policy-object id from wallet_snapshot_query (class === 'policy')." },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'policyId'],
     },
@@ -410,6 +434,7 @@ const tools = [
         destination: { type: 'string', description: "SAFE address (omnistar1...). NEVER the agent's own profile address." },
         user: { type: 'string', description: 'omnistar1... address of the new user (not a username).' },
         group: { type: 'string', description: 'Group ID — literal `Primary` or a UUID. NEVER a group name. Required only if safe has >1 group.' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'user'],
     },
@@ -423,6 +448,7 @@ const tools = [
       properties: {
         destination: { type: 'string', description: 'SAFE address (omnistar1...). Users live in safe groups, not profile groups.' },
         userId: { type: 'string', description: "User-object id from wallet_snapshot_query (class === 'user'). Not an address." },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['destination', 'userId'],
     },
@@ -436,6 +462,7 @@ const tools = [
         addHelpers: { type: 'array', items: { type: 'string' }, description: 'Helper addresses/usernames to add' },
         removeHelpers: { type: 'array', items: { type: 'string' }, description: 'Helper addresses to remove (server resolves the numbered index)' },
         threshold: { type: 'number', description: 'Number of helpers required for recovery (integer count, not percentage)' },
+        signingKey: SIGNING_KEY_PROP,
       },
       required: ['threshold'],
     },
@@ -470,7 +497,9 @@ interface Deps {
 
 async function dispatch(deps: Deps, name: string, input: Record<string, unknown>): Promise<unknown> {
   const { session, cache, walletCli } = deps;
-  const query = (args: string[]) => runQuery({ walletCli, args });
+  // Every wallet-cli read runs with HOME pinned to the state root so it reads the
+  // SAME co-located config (default-key pointer) the signing paths write (P2).
+  const query = (args: string[]) => runQuery({ walletCli, args, env: walletCliEnv() });
 
   switch (name) {
     // ── reads ──
@@ -551,8 +580,10 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return session.status();
 
     // ── signing ──
-    case 'wallet_tx_create_safe':
-      return session.signPrompted(['tx', 'create-safe', '--username', String(input.username), '--broadcast'], []);
+    case 'wallet_tx_create_safe': {
+      const signer = await resolveSignerArgs(query, input.signingKey);
+      return session.signPrompted(['tx', 'create-safe', '--username', String(input.username), '--broadcast', ...signer], []);
+    }
     case 'wallet_tx_send':
       return session.signPrompted(
         ['tx', 'send', '--from', String(input.from), '--to', String(input.to), '--amount', String(input.amount), '--broadcast'],
@@ -575,13 +606,16 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       if (chain) args.push('--chain', chain);
       if (smallCoin !== undefined) args.push('--small-coin', smallCoin.toString());
       args.push('--broadcast');
+      args.push(...(await resolveSignerArgs(query, input.signingKey)));
       return session.signPrompted(args, []);
     }
-    case 'wallet_tx_vote':
+    case 'wallet_tx_vote': {
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'vote', '--destination', String(input.destination), '--vote', String(input.vote), '--signature', String(input.signature), '--broadcast'],
+        ['tx', 'vote', '--destination', String(input.destination), '--vote', String(input.vote), '--signature', String(input.signature), '--broadcast', ...signer],
         [{ match: 'Add another vote entry?', respond: () => 'n\n' }],
       );
+    }
     case 'wallet_tx_request_recovery': {
       const { username, oldAddress } = input as { username?: string; oldAddress?: string };
       let resolved = username;
@@ -590,24 +624,29 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         const profileRaw = await query(['query', 'profile', '--address', oldAddress]);
         resolved = extractUsernameFromProfile(profileRaw);
       }
-      return session.signPrompted(['tx', 'request-recovery', '--username', resolved, '--broadcast'], []);
+      const signer = await resolveSignerArgs(query, input.signingKey);
+      return session.signPrompted(['tx', 'request-recovery', '--username', resolved, '--broadcast', ...signer], []);
     }
-    case 'wallet_tx_approve_recovery':
+    case 'wallet_tx_approve_recovery': {
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'approve-recovery', '--oldaccount', String(input.oldaccount), '--newaccount', String(input.newaccount), '--broadcast'],
+        ['tx', 'approve-recovery', '--oldaccount', String(input.oldaccount), '--newaccount', String(input.newaccount), '--broadcast', ...signer],
         [],
       );
+    }
     case 'wallet_tx_create_policy': {
       const typed = input as { destination: string; applyOn: string; conditions: PolicyCondition[]; name?: string; description?: string };
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'create-policy', '--destination', typed.destination, '--apply-on', typed.applyOn, '--broadcast'],
+        ['tx', 'create-policy', '--destination', typed.destination, '--apply-on', typed.applyOn, '--broadcast', ...signer],
         buildPolicyQueue(typed),
       );
     }
     case 'wallet_tx_edit_policy': {
       const typed = input as { destination: string; policyId: string; signature: string; applyOn: string; conditions: PolicyCondition[]; name?: string; description?: string };
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'edit-policy', '--destination', typed.destination, '--policy-id', typed.policyId, '--signature', typed.signature, '--apply-on', typed.applyOn, '--broadcast'],
+        ['tx', 'edit-policy', '--destination', typed.destination, '--policy-id', typed.policyId, '--signature', typed.signature, '--apply-on', typed.applyOn, '--broadcast', ...signer],
         buildPolicyQueue(typed),
       );
     }
@@ -616,8 +655,9 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const { signature, parentGroup } = resolvePolicyDeletion({ destination, policyId, safe });
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'delete-policy', '--destination', destination, '--policy-id', policyId, '--signature', signature, '--parent-group', parentGroup, '--broadcast'],
+        ['tx', 'delete-policy', '--destination', destination, '--policy-id', policyId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signer],
         [],
       );
     }
@@ -627,8 +667,9 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const parentGroup = resolveCreateUserTarget({ destination, group, groups: extractGroupsFromSafe(safe) });
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'create-user', '--destination', destination, '--public-key', user, '--parent-group', parentGroup, '--broadcast'],
+        ['tx', 'create-user', '--destination', destination, '--public-key', user, '--parent-group', parentGroup, '--broadcast', ...signer],
         [],
       );
     }
@@ -637,14 +678,16 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const { signature, parentGroup } = resolveUserDeletion({ destination, userId, safe });
+      const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'delete-user', '--destination', destination, '--user-id', userId, '--signature', signature, '--parent-group', parentGroup, '--broadcast'],
+        ['tx', 'delete-user', '--destination', destination, '--user-id', userId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signer],
         [],
       );
     }
     case 'wallet_tx_edit_helpers': {
       const { addHelpers = [], removeHelpers = [], threshold } = input as { addHelpers?: string[]; removeHelpers?: string[]; threshold: number };
-      return session.signPrompted(['tx', 'edit-helpers', '--broadcast'], buildEditHelpersQueue(addHelpers, removeHelpers, threshold));
+      const signer = await resolveSignerArgs(query, input.signingKey);
+      return session.signPrompted(['tx', 'edit-helpers', '--broadcast', ...signer], buildEditHelpersQueue(addHelpers, removeHelpers, threshold));
     }
     case 'wallet_notification_configure': {
       const { email, sms, webhook, telegram, push, address, url } = input as Record<string, string | undefined>;
@@ -685,7 +728,19 @@ async function doctor(): Promise<number> {
 
   const kek = resolveKekPolicy();
   out(`dev env        : ${isDevEnv() ? 'true (isDevEnv set)' : 'false'}`);
-  out(`KEK provider   : ${kek.provider}${kek.provider === 'env' ? ' (dev: persisted software KEK)' : ' (prod: hardware-preferred)'}`);
+  if (kek.provider === 'env') {
+    out('KEK provider   : env (persisted software KEK — forced via isDevEnv)');
+  } else {
+    // doctor runs without spawning SSP, so it can only predict; the actual
+    // provider is settled at first session bring-up (see session_status).
+    out('KEK provider   : auto (hardware-preferred)');
+    out('               : will fall back to persisted software KEK if no hardware enclave is present');
+  }
+
+  const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
+  out(`state root     : ${stateRoot()}`);
+  out(`  keystore dir : ${keystoreDir()}`);
+  out(`  wallet config: ${cfgPath}${existsSync(cfgPath) ? '' : ' (absent — seeded on first start)'}`);
 
   const loopback = await tcpReachable('127.0.0.1', 8080, 1500);
   out(`loopback 8080  : ${loopback ? 'reachable (SSP appears up)' : 'not reachable (normal when idle — SSP is lazy)'}`);
@@ -727,6 +782,38 @@ function tcpReachable(host: string, port: number, timeoutMs: number): Promise<bo
   });
 }
 
+// ─── state-root config seeding ────────────────────────────────────────────────
+
+/**
+ * Seed wallet-cli's co-located config on first run only. The config (the
+ * default-key pointer, user.address/pubkey) lives under the state root via the
+ * pinned HOME, alongside the SSP keystore — so they survive a restart together
+ * and cannot desync (P2). If the config already exists we NEVER touch it, which
+ * preserves the default-key pointer across restarts. signer.url is pinned to
+ * IPv4 loopback (SSP binds 127.0.0.1; `localhost` may resolve to ::1 in a
+ * dual-stack container and refuse). This internal call intentionally bypasses
+ * the tool-boundary config lock — the model never reaches it.
+ */
+async function ensureWalletConfig(walletCli: string): Promise<void> {
+  const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
+  if (existsSync(cfgPath)) return; // existing pointer — never clobber
+  try {
+    await runQuery({ walletCli, args: ['config', 'init'], env: walletCliEnv() });
+    await runQuery({
+      walletCli,
+      args: ['config', 'set', 'signer.url', 'http://127.0.0.1:8080'],
+      env: walletCliEnv(),
+    });
+    process.stderr.write(
+      `[${SERVER_NAME}] seeded wallet-cli config under ${stateRoot()} (signer.url=http://127.0.0.1:8080).\n`,
+    );
+  } catch (e) {
+    process.stderr.write(
+      `[${SERVER_NAME}] warning: could not seed wallet-cli config: ${(e as Error).message}\n`,
+    );
+  }
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -735,6 +822,7 @@ async function main(): Promise<void> {
   }
 
   const bins = await ensureBinaries(); // auto-install on startup if missing (logs to stderr)
+  await ensureWalletConfig(bins.walletCli!); // co-locate the default-key pointer (P2)
   const session = new SessionManager({
     bins: {
       signingServer: bins.signingServer!,
