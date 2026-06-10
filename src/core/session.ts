@@ -17,6 +17,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { unlink } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { Mutex } from './mutex.js';
@@ -25,6 +26,9 @@ import {
   softwareKekPolicy,
   isDevEnv,
   SSP_NO_KEK_MARKER,
+  keystoreDir,
+  walletHome,
+  walletCliEnv,
   type KekPolicy,
 } from './binPaths.js';
 import { mintKey, runHmacRotation } from './rotation.js';
@@ -189,13 +193,20 @@ export class SessionManager {
    * live pipes passes to doInit (which drains them).
    */
   private attemptSpawn(kek: KekPolicy, key: Buffer): Promise<ChildProcess> {
+    const ksDir = keystoreDir();
+    try {
+      mkdirSync(ksDir, { recursive: true });
+    } catch {
+      /* best effort; SSP will error if it truly can't write and we surface it */
+    }
     return new Promise<ChildProcess>((resolve, reject) => {
       const proc = spawn(
         this.bins.signingServer,
-        ['-spawned-by-agent', ...kek.flags, '-keystore', 'secure'],
+        ['-spawned-by-agent', ...kek.flags, '-keystore', 'secure', '-keystore-dir', ksDir],
         {
           env: {
             ...process.env,
+            HOME: walletHome(), // symmetry with wallet-cli; keeps any HOME-derived paths under the root
             SSP_HMAC_KEY: key.toString('utf8'), // env values must be strings; SSP os.Unsetenv's it
             ...kek.env,
           },
@@ -315,6 +326,7 @@ export class SessionManager {
         key: this.key,
         args,
         queue,
+        env: walletCliEnv(), // co-locate wallet-cli config under the state root
         ...(opts ? { opts } : {}),
       });
     });
@@ -334,6 +346,7 @@ export class SessionManager {
       return runWalletCliWithInput({
         walletCli: this.bins.walletCli,
         args,
+        env: walletCliEnv(), // co-locate wallet-cli config under the state root
         ...(opts.input !== undefined ? { input: opts.input } : {}),
         ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });

@@ -24,11 +24,16 @@ const provider = (() => {
   return i >= 0 ? argv[i + 1] : null;
 })();
 
+const ksDir = (() => {
+  const i = argv.indexOf('-keystore-dir');
+  return i >= 0 ? argv[i + 1] : null;
+})();
+
 if (process.env.STUB_SPAWN_LOG) {
   const sspkek = process.env.SSP_KEK ? 'set' : 'unset';
   fs.appendFileSync(
     process.env.STUB_SPAWN_LOG,
-    `spawn pid=${process.pid} port=${port} kek=${provider} sspkek=${sspkek}\n`,
+    `spawn pid=${process.pid} port=${port} kek=${provider} sspkek=${sspkek} ksdir=${ksDir} home=${process.env.HOME}\n`,
   );
 }
 

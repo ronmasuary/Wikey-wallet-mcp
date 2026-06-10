@@ -26,6 +26,10 @@ import {
   isDevEnv,
   locateInstallScript,
   runQuery,
+  walletCliEnv,
+  walletHome,
+  stateRoot,
+  keystoreDir,
   parseSnapshot,
   findSafe,
   extractGroupsFromSafe,
@@ -41,6 +45,8 @@ import {
   type QueryFilter,
 } from './core/index.js';
 import { createConnection } from 'node:net';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { createRequireResolveVersion } from './version.js';
 
 const SERVER_NAME = 'wikey-wallet-mcp';
@@ -470,7 +476,9 @@ interface Deps {
 
 async function dispatch(deps: Deps, name: string, input: Record<string, unknown>): Promise<unknown> {
   const { session, cache, walletCli } = deps;
-  const query = (args: string[]) => runQuery({ walletCli, args });
+  // Every wallet-cli read runs with HOME pinned to the state root so it reads the
+  // SAME co-located config (default-key pointer) the signing paths write (P2).
+  const query = (args: string[]) => runQuery({ walletCli, args, env: walletCliEnv() });
 
   switch (name) {
     // ── reads ──
@@ -694,6 +702,11 @@ async function doctor(): Promise<number> {
     out('               : will fall back to persisted software KEK if no hardware enclave is present');
   }
 
+  const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
+  out(`state root     : ${stateRoot()}`);
+  out(`  keystore dir : ${keystoreDir()}`);
+  out(`  wallet config: ${cfgPath}${existsSync(cfgPath) ? '' : ' (absent — seeded on first start)'}`);
+
   const loopback = await tcpReachable('127.0.0.1', 8080, 1500);
   out(`loopback 8080  : ${loopback ? 'reachable (SSP appears up)' : 'not reachable (normal when idle — SSP is lazy)'}`);
 
@@ -734,6 +747,38 @@ function tcpReachable(host: string, port: number, timeoutMs: number): Promise<bo
   });
 }
 
+// ─── state-root config seeding ────────────────────────────────────────────────
+
+/**
+ * Seed wallet-cli's co-located config on first run only. The config (the
+ * default-key pointer, user.address/pubkey) lives under the state root via the
+ * pinned HOME, alongside the SSP keystore — so they survive a restart together
+ * and cannot desync (P2). If the config already exists we NEVER touch it, which
+ * preserves the default-key pointer across restarts. signer.url is pinned to
+ * IPv4 loopback (SSP binds 127.0.0.1; `localhost` may resolve to ::1 in a
+ * dual-stack container and refuse). This internal call intentionally bypasses
+ * the tool-boundary config lock — the model never reaches it.
+ */
+async function ensureWalletConfig(walletCli: string): Promise<void> {
+  const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
+  if (existsSync(cfgPath)) return; // existing pointer — never clobber
+  try {
+    await runQuery({ walletCli, args: ['config', 'init'], env: walletCliEnv() });
+    await runQuery({
+      walletCli,
+      args: ['config', 'set', 'signer.url', 'http://127.0.0.1:8080'],
+      env: walletCliEnv(),
+    });
+    process.stderr.write(
+      `[${SERVER_NAME}] seeded wallet-cli config under ${stateRoot()} (signer.url=http://127.0.0.1:8080).\n`,
+    );
+  } catch (e) {
+    process.stderr.write(
+      `[${SERVER_NAME}] warning: could not seed wallet-cli config: ${(e as Error).message}\n`,
+    );
+  }
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -742,6 +787,7 @@ async function main(): Promise<void> {
   }
 
   const bins = await ensureBinaries(); // auto-install on startup if missing (logs to stderr)
+  await ensureWalletConfig(bins.walletCli!); // co-locate the default-key pointer (P2)
   const session = new SessionManager({
     bins: {
       signingServer: bins.signingServer!,
