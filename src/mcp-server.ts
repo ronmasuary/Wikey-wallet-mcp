@@ -230,7 +230,7 @@ const tools = [
   {
     name: 'wallet_session_status',
     description:
-      'Check the secure SSP session state. Returns { active, pid, wedged, lastRotation, state } — never any key material. The session starts automatically on the first signing call and the HMAC key auto-rotates; there is no manual start or rotate.',
+      'Check the secure SSP session state. Returns { active, pid, wedged, lastRotation, state, kekProvider, kekFallback } — never any key material. kekProvider is the keys-at-rest provider the live signer came up with (auto=hardware, env=software); kekFallback is true when software was reached because no hardware enclave was found. The session starts automatically on the first signing call and the HMAC key auto-rotates; there is no manual start or rotate.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   // ── Signing tools ──
@@ -685,7 +685,14 @@ async function doctor(): Promise<number> {
 
   const kek = resolveKekPolicy();
   out(`dev env        : ${isDevEnv() ? 'true (isDevEnv set)' : 'false'}`);
-  out(`KEK provider   : ${kek.provider}${kek.provider === 'env' ? ' (dev: persisted software KEK)' : ' (prod: hardware-preferred)'}`);
+  if (kek.provider === 'env') {
+    out('KEK provider   : env (persisted software KEK — forced via isDevEnv)');
+  } else {
+    // doctor runs without spawning SSP, so it can only predict; the actual
+    // provider is settled at first session bring-up (see session_status).
+    out('KEK provider   : auto (hardware-preferred)');
+    out('               : will fall back to persisted software KEK if no hardware enclave is present');
+  }
 
   const loopback = await tcpReachable('127.0.0.1', 8080, 1500);
   out(`loopback 8080  : ${loopback ? 'reachable (SSP appears up)' : 'not reachable (normal when idle — SSP is lazy)'}`);
