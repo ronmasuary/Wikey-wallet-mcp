@@ -31,6 +31,8 @@ export interface RunSigningOpts {
   queue: PromptStep[] | ((all: string) => PromptStep[]);
   opts?: PromptedOpts;
   proofTimeoutMs?: number;
+  /** Child env (e.g. HOME pinned to the state root to co-locate config). */
+  env?: NodeJS.ProcessEnv;
 }
 
 export async function runSigningPrompted(o: RunSigningOpts): Promise<string> {
@@ -39,7 +41,10 @@ export async function runSigningPrompted(o: RunSigningOpts): Promise<string> {
   const isFn = typeof o.queue === 'function';
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(o.walletCli, o.args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(o.walletCli, o.args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(o.env ? { env: o.env } : {}),
+    });
 
     let stderrWindow = '';
     let allStderr = '';

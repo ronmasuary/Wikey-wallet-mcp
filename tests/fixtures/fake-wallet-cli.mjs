@@ -6,8 +6,15 @@
 //     requireStdinEnd: bool,        // after proof, require stdin 'end' before finishing (end() discipline)
 //     stdout: string, exit: number }
 import readline from 'node:readline';
+import fs from 'node:fs';
 
 const sc = JSON.parse(process.env.STUB_WC || '{}');
+
+// Record the HOME this child was spawned with so tests can assert wallet-cli
+// runs with its config home pinned to the state root (P2 co-location).
+if (process.env.STUB_WC_ENV_LOG) {
+  fs.appendFileSync(process.env.STUB_WC_ENV_LOG, `home=${process.env.HOME} args=${process.argv.slice(2).join(' ')}\n`);
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let stdinEnded = false;
