@@ -12,7 +12,8 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
     wedged flag, shutdown.
   - `proof.ts` / `signing.ts` / `query.ts` / `rotation.ts` — ported skill core.
   - `snapshot.ts` — ported parser/resolvers. `snapshotCache.ts` — B2 store.
-  - `binPaths.ts` / `installer.ts` — binary resolution + KEK policy + auto-install.
+  - `binPaths.ts` / `installer.ts` — binary resolution + KEK policy
+    (hardware→software fallback) + single state root + auto-install.
   - `mutex.ts` / `redact.ts` / `configLock.ts` — supporting primitives.
 - `src/mcp-server.ts` — MCP stdio entry (`bin`), tool registry, config lockdown,
   `doctor` subcommand, signal/stdin-EOF → shutdown.
@@ -28,6 +29,11 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
 - Kill only our own SSP child — never `pkill`.
 - Security-critical config keys are locked (`signer.*`, `*.url`, `apiKey`,
   `kek*`, `keystore*`, `user.*`).
+- Single state root: `WIKEY_SSP_DIR` (default `~/.ssp`) is the ONE persistence
+  knob (operator, not agent). Keystore (`-keystore-dir <root>/keystore`) +
+  wallet-cli config (via `HOME=<root>`) co-locate so key material and the
+  default-key pointer never desync. Co-location uses `HOME`, never
+  `config set user.*` — the config lock stays intact.
 
 ## Git flow
 

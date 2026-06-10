@@ -67,12 +67,31 @@ knowledge.**
 
 | Flag | Type | Effect |
 | ---- | ---- | ------ |
-| `isDevEnv` | `"true"` / `"1"` | **Dev:** the KEK is a software key persisted to `~/.ssp/dev.kek` — generated on first use, reused across restarts so the at-rest keystore survives. **Unset / false → prod:** hardware-preferred KEK (`-kek-provider auto`), no file written. The KEK never reaches the model either way. |
+| `WIKEY_SSP_DIR` | path | **The single persistence knob (operator, not agent).** The one state root holding the SSP keystore, the software KEK (`dev.kek`), the child binaries, and wallet-cli's config (the default-key pointer). Default `~/.ssp`. Mount **one volume** here and the wallet stack is restart-stable; the keystore and the "which key is default" pointer co-locate and cannot desync. |
+| `isDevEnv` | `"true"` / `"1"` | **Force software KEK** persisted to `<root>/dev.kek` (generated on first use, reused across restarts). **Unset / false → prod:** hardware-preferred KEK (`-kek-provider auto`); if no hardware enclave is present, the MCP **auto-falls-back once** to the persisted software KEK so keys still survive a restart (logged + shown in `doctor`/`session_status`). The KEK never reaches the model either way. |
 | `installationScriptPath` | path | Explicit local path to `install-child-mode.cjs`. |
 | `installationScriptUrl` | URL | Download location for the install script, used only when no local script is found. |
 
 (`WIKEY_IS_DEV_ENV`, `WIKEY_INSTALL_SCRIPT`, `WIKEY_INSTALL_SCRIPT_URL` are
 accepted as legacy aliases.)
+
+### Persistence (operator)
+
+In a container, mount **one** volume on the state root — nothing else is needed
+and the agent's `mcp.json` stays bare:
+
+```yaml
+# docker-compose.yml (the host running the agent)
+services:
+  agent:
+    volumes:
+      - ./wikey-state:/root/.ssp   # HOME=/root → ~/.ssp; covers keystore, dev.kek, bin/, .wallet-cli
+```
+
+On real hardware (hardware KEK + a real disk at `~/.ssp`) nothing extra is
+required. **Note:** a keystore previously encrypted under an *ephemeral* KEK
+(e.g. a throwaway KEK on an enclave-less VM before this volume existed) is
+**unrecoverable** — mint fresh keys.
 
 ### Binaries & auto-install
 
