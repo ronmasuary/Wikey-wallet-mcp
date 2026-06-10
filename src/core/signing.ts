@@ -184,6 +184,33 @@ export async function runSigningPrompted(o: RunSigningOpts): Promise<string> {
   });
 }
 
+// ─── Per-call signer resolution (P3) ─────────────────────────────────────────────
+
+/**
+ * Resolve an optional per-call signer. Given a key address, fetch its pubkey via
+ * `keys get` and return `--creator <addr> --pubkey <b64>` for the dynamic
+ * wallet-cli tx builder (tx.ts:719-720 honors these over the config default).
+ * Omitted → `[]` (default key, back-compat). A bad/unknown key throws before any
+ * signing is attempted. `query` is the caller's wallet-cli read runner (env-pinned).
+ */
+export async function resolveSignerArgs(
+  query: (args: string[]) => Promise<string>,
+  signingKey: unknown,
+): Promise<string[]> {
+  if (signingKey === undefined || signingKey === null || signingKey === '') return [];
+  const addr = String(signingKey);
+  const raw = await query(['keys', 'get', '--id', addr]);
+  let pubkey: string | undefined;
+  try {
+    const j = JSON.parse(raw) as { success?: boolean; data?: { pubkeyBase64?: string } };
+    pubkey = j?.data?.pubkeyBase64;
+  } catch {
+    throw new Error(`signingKey ${addr}: could not parse keys-get output to resolve its pubkey`);
+  }
+  if (!pubkey) throw new Error(`signingKey ${addr}: no pubkey found (is the key present in the signer?)`);
+  return ['--creator', addr, '--pubkey', pubkey];
+}
+
 // ─── Profile helper ─────────────────────────────────────────────────────────────
 
 export function extractUsernameFromProfile(raw: string): string {
