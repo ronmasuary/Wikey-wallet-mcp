@@ -11,5 +11,6 @@ export * from './session.js';
 export * from './binPaths.js';
 export * from './installer.js';
 export * from './configLock.js';
+export * from './concepts.js';
 export * from './redact.js';
 export { Mutex } from './mutex.js';
