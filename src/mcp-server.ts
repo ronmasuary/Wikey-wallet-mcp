@@ -42,6 +42,8 @@ import {
   buildEditHelpersQueue,
   assertConfigSetAllowed,
   redact,
+  conceptsText,
+  lookupConcept,
   type PolicyCondition,
   type QueryFilter,
 } from './core/index.js';
@@ -54,7 +56,7 @@ const SERVER_NAME = 'wikey-wallet-mcp';
 const SERVER_VERSION = createRequireResolveVersion();
 
 // ─── Tool surface ───────────────────────────────────────────────────────────
-// Full skill surface (32 tools) MINUS wallet_session_start (lazy) and
+// Full skill surface (33 tools) MINUS wallet_session_start (lazy) and
 // wallet_hmac_rotate (automatic); KEEP read-only wallet_session_status; ADD B2's
 // wallet_snapshot (index-only), wallet_snapshot_query, wallet_snapshot_page.
 // wallet_snapshot is redefined: it returns the small index, NEVER raw JSON.
@@ -156,6 +158,20 @@ const tools = [
         limit: { type: 'number', description: 'Max rows to return' },
       },
       required: ['snapshotId', 'safe', 'class', 'offset', 'limit'],
+    },
+  },
+  {
+    name: 'wallet_concepts',
+    description:
+      'Glossary of Wikey/Omnistar concepts the operator may reference: profile vs safe, SIGNATURE vs target-chain transfer_id, balance vs balances vs assets. Call with no args for all; pass {concept} for one. Read-only — no signing, no chain call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        concept: {
+          type: 'string',
+          description: 'Optional concept key (e.g. "profile", "safe"). Omit to return all.',
+        },
+      },
     },
   },
   {
@@ -503,6 +519,8 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
 
   switch (name) {
     // ── reads ──
+    case 'wallet_concepts':
+      return lookupConcept(input.concept as string | undefined);
     case 'wallet_chain_info':
       return query(['query', 'chain-info']);
     case 'wallet_balance':
@@ -833,7 +851,10 @@ async function main(): Promise<void> {
   const cache = new SnapshotCache();
   const deps: Deps = { session, cache, walletCli: bins.walletCli! };
 
-  const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: {} }, instructions: conceptsText() },
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
