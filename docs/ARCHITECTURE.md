@@ -26,9 +26,14 @@ pipe.
 | `core/binPaths.ts`     | Resolve `signing-server`/`ssp-util`/`wallet-cli`; KEK policy (hardware→software fallback); single state root (`stateRoot`/`keystoreDir`/`walletHome`/`walletCliEnv`). |
 | `core/installer.ts`    | Locate `WIKEY_INSTALL_SCRIPT` → `~/.ssp` fallback; auto-run on startup. |
 | `core/mutex.ts`        | Async mutex shared by ensureSession + signing + rotation. |
-| `core/redact.ts`       | Defensive secret scrubber for error strings. |
+| `core/redact.ts`       | Defensive secret scrubber for error strings (HMAC keys + JWTs). |
 | `core/configLock.ts`   | Security-critical config-key lockdown. |
-| `mcp-server.ts`        | Tool registry, dispatch, config lockdown, `doctor`, signal/stdin-EOF wiring. |
+| `core/webauthn.ts`     | Pure FIDO3 authenticator: CBOR/COSE, attestation/assertion, uuid, `xyFromUncompressed`. node:crypto only. |
+| `core/identityRegistry.ts` | Operator-only alias→bundle resolver (env + live `<root>/casdoor-identities.json`); per-alias bootstrap password. |
+| `core/casdoorIdentity.ts`  | Wallet↔Casdoor bridge: read safe ecPuk, build `create-fido-object` args, `signChallengeViaSSP`, poll `/snapshot/safe`, per-alias credential store. |
+| `core/casdoorClient.ts`    | All outbound Casdoor HTTP: cookie jar, register, PKCE login (+ on-chain FIDO object + token exchange), gateway proxy call. |
+| `core/gatewaySession.ts`   | Sealed map alias→{token,expiresAt}; `ensureToken`/`register`/`login`/`call`/`status`/`shutdown`. Token NEVER returned. |
+| `mcp-server.ts`        | Tool registry, dispatch, config lockdown, `doctor`, gateway wiring, signal/stdin-EOF wiring. |
 
 ---
 
@@ -265,3 +270,60 @@ graph TD
 A per-call `signingKey` on the signing tools resolves to `--creator/--pubkey`
 (via `keys get`), letting the agent sign with a chosen funded key when the
 default has drifted — without any wallet-cli change.
+
+## 8. Casdoor MCP gateway — FIDO passkey login (additive subsystem)
+
+The wallet can log into a **Casdoor** identity server **as a passkey** and then
+call **third-party MCP servers through Casdoor's MCP gateway** — without ever
+holding the third party's secret (Casdoor injects it) and without the OAuth
+token ever reaching the model. This is the **first outbound HTTP** the server
+makes (previously loopback + installer only); the three new hosts are **Casdoor**,
+the **snapshot node**, and the **loopback signer** (`/v1/sign`).
+
+Why passkey login works: Casdoor's Go WebAuthn library cannot verify our ES256K
+signature, so on verify-failure it falls back to checking the **Omnistar chain**
+for a small **FIDO object** on the user's *safe* (`uuid = sha256(clientDataJSON)
+[:16]`). Only the safe owner can create that object, so **creating it on-chain is
+the real proof of identity** — and because it binds to the *safe* key (not the
+account key), login survives account recovery. Login therefore produces two
+artifacts: the on-chain object (a normal `tx create-fido-object`, signed +
+broadcast via `signPrompted`) and the WebAuthn challenge signature (caller-bytes,
+NOT broadcast, via the generic `session.signRaw` → `/v1/sign`).
+
+```
+   model ──(alias only; no URLs)──> wallet_gateway_{register,login,list_tools,call,status,list_identities}
+                                          │
+   identityRegistry.resolve(alias) ───────┤  (operator env + <root>/casdoor-identities.json)
+                                          v
+   gatewaySession (sealed token, NEVER returned) ── ensureToken ──> casdoorClient.login
+        │                                                              │  PKCE, no client_secret
+        │ call/list_tools (Bearer attached server-side, redacted out)  ├─ signin/begin  ─> Casdoor
+        v                                                              ├─ create-fido-object (signPrompted) ─> chain
+   Casdoor /api/server/{owner}/{name} ──inject upstream secret──> 3rd-party MCP
+                                                                       ├─ waitForObjectValid GET /snapshot/safe
+                                                                       ├─ signRaw challenge ─> signer /v1/sign
+                                                                       └─ token exchange ─> sealed in gatewaySession
+```
+
+```mermaid
+graph TD
+  M[AI model] -->|alias only| D[dispatch + IdentityRegistry.resolve]
+  D --> GS[gatewaySession: sealed token]
+  GS --> CC[casdoorClient]
+  CC -->|signin/begin + finish PKCE| CD[Casdoor]
+  CC -->|tx create-fido-object signPrompted| CH[Omnistar chain]
+  CC -->|GET /snapshot/safe poll| SN[snapshot node]
+  CC -->|signRaw challenge| SSP[signer /v1/sign]
+  CC -->|access_token| GS
+  GS -->|Bearer attached server-side| CD
+  CD -->|inject upstream secret| TP[3rd-party MCP]
+  TP --> GS --> M
+  GS -. token NEVER returned .-x M
+```
+
+New-module roles: **`identityRegistry`** is the operator/model trust boundary —
+the model passes an *alias*, every URL comes from operator config (env or the
+live-reloaded JSON file), so there is no SSRF/phishing channel. **`webauthn`** is
+the pure, deterministic credential builder. **`casdoorIdentity`** bridges wallet
+reads/signing to the Casdoor flow. **`casdoorClient`** is the one auditable place
+for all Casdoor HTTP. **`gatewaySession`** seals the token like the HMAC key.

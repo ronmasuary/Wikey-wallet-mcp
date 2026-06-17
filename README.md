@@ -75,6 +75,10 @@ knowledge.**
 (`WIKEY_IS_DEV_ENV`, `WIKEY_INSTALL_SCRIPT`, `WIKEY_INSTALL_SCRIPT_URL` are
 accepted as legacy aliases.)
 
+The Casdoor gateway is **off by default**: with no `WIKEY_CASDOOR_*` set, the
+`wallet_gateway_*` tools simply error on use and nothing else changes. To enable
+it, define identities (next section).
+
 ### Persistence (operator)
 
 In a container, mount **one** volume on the state root — nothing else is needed
@@ -138,7 +142,7 @@ script was found.
 
 ---
 
-## Tool surface (32 tools)
+## Tool surface (39 tools)
 
 Skill-compatible: the full skill surface **minus** `wallet_session_start` (the
 session now starts lazily on the first signing call) and `wallet_hmac_rotate`
@@ -161,6 +165,10 @@ snapshot tools are added.
   `wallet_tx_create_policy`, `wallet_tx_edit_policy`, `wallet_tx_delete_policy`,
   `wallet_tx_create_user`, `wallet_tx_delete_user`, `wallet_tx_edit_helpers`,
   `wallet_notification_configure`.
+- **Casdoor MCP gateway** (passkey login; token sealed): `wallet_gateway_list_identities`,
+  `wallet_gateway_register`, `wallet_gateway_login`, `wallet_gateway_list_tools`,
+  `wallet_gateway_call`, `wallet_gateway_status`. Every per-identity tool takes an
+  `identity` **alias** (never a URL). See "Casdoor MCP gateway" below.
 
 Per-tool operational guidance (smallCoin math, the policy `applyOn` mixing rule,
 "a successful broadcast is **not** a completed deletion → re-query `isDeleted`",
@@ -175,6 +183,78 @@ valid proof** without the sealed HMAC key. SSP returns **403** and the call
 fails (or times out with `TIMEOUT` after `wallet-cli`'s ~60s `signTimeout`) —
 it never signs. The security claim holds; the mechanism is "403 / no valid
 proof," not an indefinite stall.
+
+---
+
+## Casdoor MCP gateway (passkey login)
+
+The wallet can log into a **Casdoor** identity server **as a FIDO passkey** and
+then call **third-party MCP servers through Casdoor's MCP gateway** — Casdoor
+injects the upstream secret, so the agent never holds it. The OAuth token is
+**sealed server-side and never returned to the model** (it lives like the HMAC
+key). Full design in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) §8 and
+[docs/SECURITY.md](./docs/SECURITY.md).
+
+**New outbound hosts** (this is the server's first network egress beyond the
+installer): the **Casdoor host**, the **snapshot node**, and the **loopback
+signer** (`/v1/sign`). The operator should restrict egress accordingly.
+
+### Multi-identity model (operator defines, model picks by alias)
+
+The operator defines a set of named identities. The model selects one by its
+**alias only** for every gateway tool — it can never supply a host/URL (that
+would be an SSRF/phishing hole). Identities load from **two operator-only
+sources, merged (file wins, re-read live so additions need no restart):**
+
+1. **Environment.** List aliases in `WIKEY_CASDOOR_ALIASES` (comma-separated);
+   each field is `WIKEY_CASDOOR_<FIELD>__<ALIAS>` (alias upper-cased, non
+   `[A-Z0-9]`→`_`):
+
+   ```
+   WIKEY_CASDOOR_ALIASES=work
+   WIKEY_CASDOOR_HOST__WORK=http://localhost:8000
+   WIKEY_CASDOOR_RP_ID__WORK=localhost
+   WIKEY_CASDOOR_ORIGIN__WORK=http://localhost:8000
+   WIKEY_CASDOOR_ORG__WORK=organization_kehat
+   WIKEY_CASDOOR_USER__WORK=kehat_user
+   WIKEY_CASDOOR_APP__WORK=application_kehat
+   WIKEY_CASDOOR_CLIENT_ID__WORK=9d6472debe42f68f5f97
+   WIKEY_CASDOOR_SNAPSHOT_NODE__WORK=proxy.omnistar.io:9093
+   WIKEY_CASDOOR_ENV__WORK=main
+   WIKEY_CASDOOR_REDIRECT_URI__WORK=http://localhost:9000/callback
+   # optional: WIKEY_CASDOOR_SCOPE__WORK (default "read"), WIKEY_CASDOOR_SNAPSHOT_SECURE__WORK (default true)
+   # one-time enrollment secret (unset after register; never seen by the model):
+   WIKEY_CASDOOR_BOOTSTRAP_PASSWORD__WORK=...
+   ```
+
+2. **File.** A JSON array at `<root>/casdoor-identities.json` (operator-editable,
+   re-read on every resolve — add identities at runtime, no restart):
+
+   ```json
+   [
+     { "alias": "team", "host": "https://id.team.example", "rpId": "team.example",
+       "origin": "https://id.team.example", "org": "org_team", "user": "team_user",
+       "app": "app_team", "clientId": "cid_team", "snapshotNode": "node.team:9093",
+       "env": "main", "redirectUri": "https://id.team.example/callback",
+       "scope": "read", "snapshotSecure": true }
+   ]
+   ```
+
+> **Operator requirements:** (1) configure the Casdoor gateway app with **no
+> custom OAuth scopes** (custom scopes force a human consent screen that headless
+> login cannot pass — login throws a clear error if it sees one); (2) point
+> `SNAPSHOT_NODE` at the **same** node Casdoor's `wikeyNode` reads, or the
+> on-chain object validity poll watches a different chain view.
+
+### Flow
+
+`wallet_gateway_register {identity}` (one-time, uses the bootstrap password) →
+`wallet_gateway_login {identity}` (creates an on-chain FIDO proof object, signs
+the challenge, exchanges an OAuth code; returns auth status, **no token**) →
+`wallet_gateway_list_tools {identity, owner_name}` → `wallet_gateway_call
+{identity, owner_name, name, arguments}` (auto-logs-in; result redacted). The
+registered credential id (public, not a secret) persists per identity at
+`<root>/casdoor-credentials/<alias>.json`.
 
 ---
 

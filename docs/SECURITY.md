@@ -3,7 +3,10 @@
 ## Threat actors
 
 1. **External / network attacker** — mitigated by stdio-only transport (no HTTP
-   exposed) and SSP binding loopback only; keys never egress on the network.
+   exposed) and SSP binding loopback only; keys never egress on the network. The
+   Casdoor gateway subsystem (below) adds **outbound** HTTP to three operator-
+   configured hosts (Casdoor, the snapshot node, the loopback signer) — it never
+   *exposes* a listener; egress should be restricted by the operator.
 2. **Other local processes on the VM** — mitigated by killing only our own SSP
    child (never `pkill`) and by the short-lived, rotated HMAC key. (UDS +
    `SO_PEERCRED` is a documented future hardening; SSP's bind is fixed this round.)
@@ -100,6 +103,40 @@ under `maxResultBytes` (default 4 KB, below the smallest known host tool-result
 limit) with explicit `{truncated, total, returned, nextOffset}`. A host that
 silently truncates a large tool result can therefore never feed the model a
 corrupted snapshot (wrong SIGNATURE / parentGroup / isDeleted).
+
+### Casdoor MCP-gateway: sealed token + alias-only boundary (FIDO subsystem)
+
+The optional Casdoor passkey-login subsystem keeps every secret on the same side
+of the boundary as the HMAC key:
+
+- **Sealed OAuth token.** The access token obtained from Casdoor is held inside
+  `GatewaySession` (a per-alias `{token, expiresAt}` map) and is **never**
+  returned to the model, logged, or placed in `status()`. The model calls
+  high-level tools; the server attaches the `Bearer` header itself. `shutdown()`
+  drops all tokens. `gatewaySession.test.ts` asserts no token appears in status.
+- **Alias-only model boundary (anti-SSRF/phishing).** Every gateway tool except
+  `list_identities` takes an `identity` that is **only an alias**. The model can
+  choose *among* operator-approved identities but can never supply a host/URL —
+  all URLs (Casdoor host, origin, snapshot node, redirect) come from the
+  operator registry (env + `<root>/casdoor-identities.json`), resolved at one
+  choke point (`IdentityRegistry.resolve`, which throws on an unknown alias).
+- **Bootstrap password never from the model.** Passkey enrollment uses a one-time
+  per-identity password from `WIKEY_CASDOOR_BOOTSTRAP_PASSWORD__<ALIAS>` (env,
+  operator-set). It is read only in the register path, never persisted, never
+  returned; unset it after enrollment.
+- **No custom OAuth scopes (headless consent guard).** The Casdoor gateway app
+  must be configured with **no custom scopes**, or Casdoor returns a consent step
+  (`signin/finish` → `data.required:true`). Login detects this and throws a clear
+  "disable custom scopes" error rather than hanging on a human screen.
+- **Redacted passthrough.** Gateway `list_tools`/`call` results are scrubbed with
+  `redact()` (HMAC-hex + JWT patterns) before reaching the model, so a leaked
+  token/key in an upstream response is caught. The explicit-secret path remains
+  the primary guard for known secrets.
+- **Per-identity credential store.** The registered passkey credential id lives at
+  `<root>/casdoor-credentials/<alias>.json` (0600) — a public credential id, not a
+  secret; the safe's private key never leaves SSP. The challenge signature is
+  produced via the generic `session.signRaw` under the **same nonce mutex** as all
+  signing, so a login can never desync the nonce.
 
 ## Confused-deputy caveat (H12)
 

@@ -15,8 +15,12 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
   - `binPaths.ts` / `installer.ts` — binary resolution + KEK policy
     (hardware→software fallback) + single state root + auto-install.
   - `mutex.ts` / `redact.ts` / `configLock.ts` — supporting primitives.
+  - Casdoor MCP-gateway (FIDO passkey login): `webauthn.ts` (pure FIDO3),
+    `identityRegistry.ts` (operator alias→bundle), `casdoorIdentity.ts`
+    (wallet↔Casdoor bridge), `casdoorClient.ts` (Casdoor HTTP), `gatewaySession.ts`
+    (sealed token). `session.signRaw` signs caller bytes via `/v1/sign`.
 - `src/mcp-server.ts` — MCP stdio entry (`bin`), tool registry, config lockdown,
-  `doctor` subcommand, signal/stdin-EOF → shutdown.
+  `doctor` subcommand, gateway wiring, signal/stdin-EOF → shutdown.
 - `tests/` — `node:test` + `tsx`. Spawn-based suites use `tests/fixtures/*.mjs`
   stub binaries.
 
@@ -34,6 +38,11 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
   wallet-cli config (via `HOME=<root>`) co-locate so key material and the
   default-key pointer never desync. Co-location uses `HOME`, never
   `config set user.*` — the config lock stays intact.
+- Casdoor gateway: the OAuth token is sealed like the HMAC key — held in
+  `GatewaySession`, never returned to the model, never in `status()`, dropped on
+  shutdown. The model passes an identity **alias only**; all URLs come from the
+  operator registry (env + `<root>/casdoor-identities.json`) — never accept a
+  model-supplied host. The gateway app must have **no custom OAuth scopes**.
 
 ## Git flow
 
