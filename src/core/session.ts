@@ -16,11 +16,14 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
+import { request as httpRequest } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { Mutex } from './mutex.js';
+import { computeProof } from './proof.js';
 import {
   resolveKekPolicy,
   softwareKekPolicy,
@@ -72,6 +75,24 @@ interface SpawnFailure {
   output: string;
   exitCode?: number | null;
   cause?: Error;
+}
+
+/**
+ * Interpret an ssp-util proof string the SAME way wallet-cli's promptForProof
+ * does (proof-prompt.ts): raw JSON → base64-decoded JSON → otherwise the raw
+ * string. The proof must reach /v1/sign as the identical JSON value, or the
+ * integrity validator (which hashes the raw proof bytes) rejects the request.
+ */
+function parseProofValue(proof: string): unknown {
+  try {
+    return JSON.parse(proof);
+  } catch {
+    try {
+      return JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    } catch {
+      return proof;
+    }
+  }
 }
 
 export class SessionManager {
@@ -350,6 +371,90 @@ export class SessionManager {
         ...(opts.input !== undefined ? { input: opts.input } : {}),
         ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
+    });
+  }
+
+  /**
+   * Sign arbitrary caller-supplied bytes via the running signer's `/v1/sign`
+   * endpoint (P-FIDO). Generic: knows nothing about Casdoor/gateway — it is the
+   * safe doorway the login flow uses to sign a WebAuthn challenge that is NOT a
+   * transaction and must NOT be broadcast (gateway logic lives in
+   * casdoorIdentity.ts). Mirrors signPrompted/runWithSession:
+   * ensureSession → mutex.runExclusive → use the private key, so the sealed HMAC
+   * key never leaves this closure (only the public DER signature is returned) and
+   * the nonce stays correct because it runs under the SAME mutex as every other
+   * signing op (a desync here would wedge the session — see plan risk #1).
+   *
+   * @param unsignedDataHex the exact bytes to sign, hex-encoded
+   * @param signingPubKey   the 33-byte compressed SEC1 pubkey hex of the signing
+   *                        key (must already exist in the signer keystore, else 404)
+   * @returns the DER signature, hex-encoded
+   */
+  async signRaw(unsignedDataHex: string, signingPubKey: string): Promise<string> {
+    await this.ensureSession();
+    return this.mutex.runExclusive(async () => {
+      if (!this.key) throw new Error('no active HMAC key');
+      const proof = await computeProof({
+        sspUtil: this.bins.sspUtil,
+        nonceFile: this.nonceFile,
+        key: this.key, // sealed Buffer — written to ssp-util stdin, never stringified
+        unsignedData: unsignedDataHex,
+        signingPubKey,
+      });
+      const body = JSON.stringify({
+        requestId: randomUUID(),
+        unsignedData: unsignedDataHex,
+        proof: parseProofValue(proof), // embed as the SAME JSON value wallet-cli sends
+        signingPubKey,
+      });
+      return this.postSign(body);
+    });
+  }
+
+  /** POST a prebuilt body to the loopback signer's /v1/sign; resolve its DER signature hex. */
+  private postSign(body: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: this.host,
+          port: this.port,
+          path: '/v1/sign',
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.setEncoding('utf8');
+          res.on('data', (c: string) => {
+            data += c;
+          });
+          res.on('end', () => {
+            if (res.statusCode !== 200) {
+              reject(new Error(`/v1/sign HTTP ${res.statusCode}: ${data.slice(0, 300)}`));
+              return;
+            }
+            try {
+              const j = JSON.parse(data) as { signature?: unknown };
+              if (typeof j.signature !== 'string' || j.signature.length === 0) {
+                reject(new Error('/v1/sign: no signature in response'));
+                return;
+              }
+              resolve(j.signature);
+            } catch {
+              reject(new Error(`/v1/sign: malformed JSON response: ${data.slice(0, 200)}`));
+            }
+          });
+        },
+      );
+      req.setTimeout(30_000, () => {
+        req.destroy(new Error('/v1/sign timed out after 30s'));
+      });
+      req.on('error', (e) => reject(e));
+      req.write(body);
+      req.end();
     });
   }
 

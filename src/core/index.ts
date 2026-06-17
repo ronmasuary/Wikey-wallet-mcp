@@ -14,4 +14,6 @@ export * from './configLock.js';
 export * from './concepts.js';
 export * from './redact.js';
 export * from './webauthn.js';
+export * from './identityRegistry.js';
+export * from './casdoorIdentity.js';
 export { Mutex } from './mutex.js';
