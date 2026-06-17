@@ -7,6 +7,12 @@
 // unknown-shaped leak (e.g. SSP printing a key from elsewhere) is still caught.
 
 const HEX64_RE = /\b[0-9a-fA-F]{64}\b/g;
+// JWT: header.payload.signature, all base64url; the header begins `eyJ` (base64
+// of `{"`). Scrubs an OAuth access token if one ever surfaces in a gateway
+// result or log. The explicit-secret path (passing the live token) is the real
+// guard; this is the defensive net (plan risk #6 — may over-match benign dotted
+// base64, which is acceptable for an error/log string).
+const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const REDACTED = '[REDACTED]';
 
 /**
@@ -19,6 +25,7 @@ export function redact(text: string, secrets: Array<string | undefined> = []): s
     if (!s) continue;
     out = out.split(s).join(REDACTED);
   }
+  out = out.replace(JWT_RE, REDACTED);
   out = out.replace(HEX64_RE, REDACTED);
   return out;
 }
