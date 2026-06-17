@@ -44,6 +44,9 @@ import {
   redact,
   conceptsText,
   lookupConcept,
+  IdentityRegistry,
+  CasdoorClient,
+  GatewaySession,
   type PolicyCondition,
   type QueryFilter,
 } from './core/index.js';
@@ -501,6 +504,77 @@ const tools = [
       required: [],
     },
   },
+  // ── Casdoor MCP-gateway tools ──
+  {
+    name: 'wallet_gateway_list_identities',
+    description:
+      'List the operator-approved Casdoor identities the wallet can log in as, with their auth state: [{ alias, host, org, user, app, env, registered, authenticated, expiresInSec }]. NEVER returns tokens. The model selects an identity by its ALIAS for the other wallet_gateway_* tools — it can never supply a host/URL (those are operator-only).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'wallet_gateway_register',
+    description:
+      "One-time enrollment: bind this wallet's passkey to the identity's Casdoor user, using the operator's per-identity bootstrap password (env, never from the model). Creates the passkey credential on the SAFE (recovery-proof). Returns { registered, safe } — no secrets. Run once per identity before wallet_gateway_login.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identity: { type: 'string', description: 'Operator-approved identity alias (see wallet_gateway_list_identities). NEVER a URL/host.' },
+      },
+      required: ['identity'],
+    },
+  },
+  {
+    name: 'wallet_gateway_login',
+    description:
+      'Log into the identity\'s Casdoor via the wallet passkey (creates an on-chain FIDO proof object, signs the challenge, exchanges an OAuth code). The access token is held server-side and NEVER returned. Returns the auth status { alias, authenticated, registered, expiresInSec }. Subsequent gateway calls auto-login if needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identity: { type: 'string', description: 'Operator-approved identity alias. NEVER a URL/host.' },
+      },
+      required: ['identity'],
+    },
+  },
+  {
+    name: 'wallet_gateway_list_tools',
+    description:
+      'List the tools a Casdoor MCP-gateway server exposes (JSON-RPC tools/list), through the identity\'s sealed token. Auto-logs-in if needed. Result is passed through redacted (any leaked token/key is scrubbed).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identity: { type: 'string', description: 'Operator-approved identity alias. NEVER a URL/host.' },
+        owner_name: { type: 'string', description: 'Gateway server as "owner/name" (e.g. organization_kehat/sales-mcp).' },
+      },
+      required: ['identity', 'owner_name'],
+    },
+  },
+  {
+    name: 'wallet_gateway_call',
+    description:
+      'Call a tool on a Casdoor MCP-gateway server (JSON-RPC tools/call), through the identity\'s sealed token. Casdoor injects the upstream secret — the wallet never holds it. Auto-logs-in if needed. Result is passed through redacted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identity: { type: 'string', description: 'Operator-approved identity alias. NEVER a URL/host.' },
+        owner_name: { type: 'string', description: 'Gateway server as "owner/name".' },
+        name: { type: 'string', description: 'Upstream tool name to invoke.' },
+        arguments: { type: 'object', description: 'Arguments object for the upstream tool.' },
+      },
+      required: ['identity', 'owner_name', 'name'],
+    },
+  },
+  {
+    name: 'wallet_gateway_status',
+    description:
+      'Auth state for one identity: { alias, authenticated, registered, expiresInSec }. Never returns a token.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identity: { type: 'string', description: 'Operator-approved identity alias.' },
+      },
+      required: ['identity'],
+    },
+  },
 ];
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
@@ -509,6 +583,8 @@ interface Deps {
   session: SessionManager;
   cache: SnapshotCache;
   walletCli: string;
+  registry: IdentityRegistry;
+  gateway: GatewaySession;
 }
 
 async function dispatch(deps: Deps, name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -721,6 +797,45 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return session.signPrompted(args, []);
     }
 
+    // ── Casdoor MCP gateway ──
+    case 'wallet_gateway_list_identities': {
+      const summaries = deps.registry.list();
+      const statuses = deps.gateway.status() as { alias: string }[];
+      const byAlias = new Map(statuses.map((s) => [s.alias, s]));
+      return summaries.map((s) => ({ ...s, ...(byAlias.get(s.alias) ?? {}) }));
+    }
+    case 'wallet_gateway_register': {
+      deps.registry.resolve(String(input.identity)); // validate alias before anything
+      return deps.gateway.register(String(input.identity));
+    }
+    case 'wallet_gateway_login': {
+      deps.registry.resolve(String(input.identity));
+      return deps.gateway.login(String(input.identity));
+    }
+    case 'wallet_gateway_list_tools': {
+      const alias = String(input.identity);
+      deps.registry.resolve(alias);
+      const result = await deps.gateway.listTools(alias, String(input.owner_name));
+      // Redacted passthrough (decision #3): scrub any leaked token/key/JWT.
+      return redact(JSON.stringify(result));
+    }
+    case 'wallet_gateway_call': {
+      const alias = String(input.identity);
+      deps.registry.resolve(alias);
+      const result = await deps.gateway.call(
+        alias,
+        String(input.owner_name),
+        String(input.name),
+        (input.arguments ?? {}) as Record<string, unknown>,
+      );
+      return redact(JSON.stringify(result));
+    }
+    case 'wallet_gateway_status': {
+      const alias = String(input.identity);
+      deps.registry.resolve(alias); // unknown alias → clear error (not a bare registered:false)
+      return deps.gateway.status(alias);
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -849,7 +964,14 @@ async function main(): Promise<void> {
     },
   });
   const cache = new SnapshotCache();
-  const deps: Deps = { session, cache, walletCli: bins.walletCli! };
+  // Casdoor MCP-gateway wiring (lazy: with no WIKEY_CASDOOR_* config the gateway
+  // tools simply error on use — nothing else changes). The gateway query runner
+  // pins HOME to the state root so it reads the SAME co-located wallet config.
+  const registry = new IdentityRegistry();
+  const gatewayQuery = (args: string[]) => runQuery({ walletCli: bins.walletCli!, args, env: walletCliEnv() });
+  const casdoor = new CasdoorClient({ session, query: gatewayQuery });
+  const gateway = new GatewaySession(casdoor, registry);
+  const deps: Deps = { session, cache, walletCli: bins.walletCli!, registry, gateway };
 
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -874,6 +996,7 @@ async function main(): Promise<void> {
 
   // Lifecycle: stdin-EOF / signals → shutdown (H9).
   const shutdown = () => {
+    gateway.shutdown(); // drop all sealed OAuth tokens
     session.shutdown();
     process.exit(0);
   };
