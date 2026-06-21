@@ -30,6 +30,7 @@ import {
   walletHome,
   walletCliEnv,
   type KekPolicy,
+  type WalletCliLauncher,
 } from './binPaths.js';
 import { mintKey, runHmacRotation } from './rotation.js';
 import { runSigningPrompted, type PromptStep, type PromptedOpts } from './signing.js';
@@ -38,7 +39,7 @@ import { runWalletCliWithInput } from './query.js';
 export interface SessionBins {
   signingServer: string;
   sspUtil: string;
-  walletCli: string;
+  walletCli: WalletCliLauncher;
 }
 
 export interface SessionConfig {

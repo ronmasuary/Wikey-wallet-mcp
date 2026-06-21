@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { runSigningPrompted } from '../src/core/signing.js';
 import { mintKey } from '../src/core/rotation.js';
 
-const WC = fileURLToPath(new URL('./fixtures/fake-wallet-cli.mjs', import.meta.url));
+const WC_PATH = fileURLToPath(new URL('./fixtures/fake-wallet-cli.mjs', import.meta.url));
+// wallet-cli launcher: run the .mjs stub via node (matches the real Windows path
+// where wallet-cli is a Node CLI, and is cross-platform spawnable).
+const WC = { command: process.execPath, prefixArgs: [WC_PATH], display: WC_PATH };
 const SSP = fileURLToPath(new URL('./fixtures/fake-ssp-util.mjs', import.meta.url));
 const NONCE = fileURLToPath(new URL('./fixtures/.nonce-signing', import.meta.url));
 

@@ -17,10 +17,29 @@ import path from 'node:path';
 const IS_WINDOWS = process.platform === 'win32';
 const EXE = IS_WINDOWS ? '.exe' : '';
 
+/**
+ * How to launch wallet-cli. wallet-cli is a Node CLI, not a native binary: npm
+ * installs it as an extensionless shell shim on POSIX and as `wallet-cli.cmd`
+ * (plus `.ps1`) on Windows — never `wallet-cli.exe`. Node 22 also refuses to
+ * `spawn`/`execFile` a `.cmd`/`.bat` directly without `shell: true` (the
+ * CVE-2024-27980 mitigation → EINVAL). So we resolve the underlying JS entry and
+ * run it via `node <js>` on Windows. On POSIX the extensionless shim is directly
+ * executable, so we run it as-is. Callers spawn `command` with
+ * `[...prefixArgs, ...theirArgs]`.
+ */
+export interface WalletCliLauncher {
+  /** Executable to spawn (the shim on POSIX; the node binary on Windows). */
+  command: string;
+  /** Args prepended before the caller's args (the JS entry on Windows; [] on POSIX). */
+  prefixArgs: string[];
+  /** Human-readable resolved path, for doctor display (the shim or the JS entry). */
+  display: string;
+}
+
 export interface ResolvedBins {
   signingServer: string | null;
   sspUtil: string | null;
-  walletCli: string | null;
+  walletCli: WalletCliLauncher | null;
 }
 
 /**
@@ -48,9 +67,18 @@ export function walletHome(): string {
   return stateRoot();
 }
 
-/** Child env that relocates wallet-cli's config home under the state root. */
+/**
+ * Child env that relocates wallet-cli's config home under the state root.
+ * wallet-cli derives `~/.wallet-cli` via Node's `os.homedir()`, which reads
+ * `HOME` on POSIX but `USERPROFILE` on Windows (libuv `uv_os_homedir`). Pinning
+ * only `HOME` therefore has NO effect on Windows: the config lands in the real
+ * profile dir, desyncs from the keystore, and — because ensureWalletConfig's
+ * never-clobber guard checks the state-root path — gets wiped (re-`config init`)
+ * on every restart, dropping the default-key pointer. Pin both to fix all OSes.
+ */
 export function walletCliEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, HOME: walletHome() };
+  const home = walletHome();
+  return { ...process.env, HOME: home, USERPROFILE: home };
 }
 
 function sspBinDir(): string {
@@ -98,12 +126,62 @@ function findExecutable(name: string, preferredDirs: Array<string | null>): stri
   return null;
 }
 
+/**
+ * Resolve the JS entry behind npm's `wallet-cli.cmd` shim on Windows. The shim's
+ * launch line names the package's JS entry relative to the shim dir
+ * (`"%dp0%\node_modules\…\index.js"` / `"%~dp0\…"`). We extract the last quoted
+ * `.js`/`.cjs`/`.mjs` token, strip the `%dp0%`/`%~dp0%` prefix, and resolve it
+ * against the shim dir — robust to the package's internal layout and name.
+ */
+function walletCliJsFromShim(dir: string): string | null {
+  const shim = path.join(dir, 'wallet-cli.cmd');
+  if (!existsSync(shim)) return null;
+  let text: string;
+  try {
+    text = readFileSync(shim, 'utf8');
+  } catch {
+    return null;
+  }
+  const matches = [...text.matchAll(/"([^"]*\.[mc]?js)"/gi)];
+  const token = matches.at(-1)?.[1];
+  if (!token) return null;
+  const rel = token.replace(/^%~?dp0%?[\\/]/i, '').replace(/[\\/]/g, path.sep);
+  const resolved = path.isAbsolute(rel) ? rel : path.join(dir, rel);
+  return existsSync(resolved) ? resolved : null;
+}
+
+/**
+ * Resolve wallet-cli into a cross-platform launcher (see WalletCliLauncher). A
+ * real native `wallet-cli.exe`, if present, is preferred and run directly;
+ * otherwise on Windows we run the package's JS entry via `node`, and on POSIX we
+ * run the directly-executable shim.
+ */
+function resolveWalletCli(): WalletCliLauncher | null {
+  // A real native executable (rare) is spawnable directly on any platform.
+  if (IS_WINDOWS) {
+    const exe = findExecutable('wallet-cli', [npmGlobalBin()]); // appends .exe on win
+    if (exe) return { command: exe, prefixArgs: [], display: exe };
+
+    const dirs = [npmGlobalBin(), ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean)];
+    for (const dir of dirs) {
+      if (!dir) continue;
+      const js = walletCliJsFromShim(dir);
+      if (js) return { command: process.execPath, prefixArgs: [js], display: js };
+    }
+    return null;
+  }
+
+  // POSIX: the extensionless shim is directly executable.
+  const shim = findExecutable('wallet-cli', [npmGlobalBin()]);
+  return shim ? { command: shim, prefixArgs: [], display: shim } : null;
+}
+
 export function resolveBins(): ResolvedBins {
   const sspDir = sspBinDir();
   return {
     signingServer: findExecutable('signing-server', [sspDir]),
     sspUtil: findExecutable('ssp-util', [sspDir]),
-    walletCli: findExecutable('wallet-cli', [npmGlobalBin()]),
+    walletCli: resolveWalletCli(),
   };
 }
 

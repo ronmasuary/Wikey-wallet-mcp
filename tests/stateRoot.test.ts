@@ -10,7 +10,10 @@ import { stateRoot, keystoreDir, walletHome, walletCliEnv } from '../src/core/bi
 
 const SIGNING = fileURLToPath(new URL('./fixtures/fake-signing-server.mjs', import.meta.url));
 const SSP = fileURLToPath(new URL('./fixtures/fake-ssp-util.mjs', import.meta.url));
-const WC = fileURLToPath(new URL('./fixtures/fake-wallet-cli.mjs', import.meta.url));
+const WC_PATH = fileURLToPath(new URL('./fixtures/fake-wallet-cli.mjs', import.meta.url));
+// wallet-cli launcher: run the .mjs stub via node (matches the real Windows path
+// where wallet-cli is a Node CLI, and is cross-platform spawnable).
+const WC = { command: process.execPath, prefixArgs: [WC_PATH], display: WC_PATH };
 
 const SIGN_SCENARIO = JSON.stringify({
   sign: { unsignedData: 'AA', signingPubKey: 'PK' },

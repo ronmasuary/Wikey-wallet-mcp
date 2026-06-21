@@ -10,6 +10,7 @@
 
 import { spawn } from 'node:child_process';
 
+import type { WalletCliLauncher } from './binPaths.js';
 import { computeProof, parseSignRequest } from './proof.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -22,7 +23,7 @@ export interface PromptedOpts {
 }
 
 export interface RunSigningOpts {
-  walletCli: string;
+  walletCli: WalletCliLauncher;
   sspUtil: string;
   nonceFile: string;
   /** Sealed HMAC key bytes. Forwarded to computeProof; never stringified here. */
@@ -41,7 +42,7 @@ export async function runSigningPrompted(o: RunSigningOpts): Promise<string> {
   const isFn = typeof o.queue === 'function';
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(o.walletCli, o.args, {
+    const child = spawn(o.walletCli.command, [...o.walletCli.prefixArgs, ...o.args], {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(o.env ? { env: o.env } : {}),
     });

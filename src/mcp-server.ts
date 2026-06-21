@@ -44,7 +44,19 @@ import {
   redact,
   type PolicyCondition,
   type QueryFilter,
+  type WalletCliLauncher,
 } from './core/index.js';
+import {
+  gatewayRegister,
+  gatewayStatus,
+  gatewayLogout,
+  gatewayLogin,
+  gatewayApiCall,
+  type RegisterInput,
+  type LoginInput,
+  type LoginSigner,
+  type ApiCallInput,
+} from './core/idp/index.js';
 import { createConnection } from 'node:net';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -485,6 +497,79 @@ const tools = [
       required: [],
     },
   },
+
+  // ── Casdoor / gateway IDP (wallet-passkey login) ──
+  {
+    name: 'wallet_gateway_register',
+    description:
+      "Enroll this wallet's passkey with a Casdoor/gateway IdP, binding it to the wallet's SAFE (recovery-proof). The realistic path is an invited employee: pass `invite` (the invitation link) and nothing else — the agent derives host/application/organization/pinned-username and the public clientId/redirectUri from the link, signs up with the invitation code (the one-time secret), and binds the passkey. Existing users without an invite: pass explicit fields + `password`. Requires a default key whose profile has a safe with an EC public key (assets.ecPuk). Persists the target + credential under the state root. Does NOT sign any on-chain tx.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        invite: {
+          type: 'string',
+          description:
+            'Invitation link, e.g. https://gateway.wikey.io/signup/application_x?invitationCode=ABC123 — the agent derives everything else from it.',
+        },
+        host: { type: 'string', description: 'Gateway host (https://…). Derived from the invite when omitted.' },
+        organization: { type: 'string', description: 'Casdoor organization (owner). Derived from the invite when omitted.' },
+        username: { type: 'string', description: 'Pinned username to enroll. Derived from the invite when omitted.' },
+        application: { type: 'string', description: 'Casdoor application. Derived from the invite when omitted.' },
+        clientId: { type: 'string', description: 'OAuth client id for the later token login (public). Derived from the invite when omitted.' },
+        clientSecret: { type: 'string', description: 'OAuth client secret (optional; passkey login is a public PKCE client and does not need it).' },
+        redirectUri: { type: 'string', description: 'OAuth redirect URI (defaults to the agent loopback).' },
+        rpId: { type: 'string', description: 'WebAuthn rpId (defaults to the host domain).' },
+        origin: { type: 'string', description: 'WebAuthn origin (defaults to https://host).' },
+        invitationCode: { type: 'string', description: 'Bootstrap invitation code, if not embedded in `invite`.' },
+        password: { type: 'string', description: 'Bootstrap password for an existing user (alternative to an invitation code).' },
+      },
+    },
+  },
+  {
+    name: 'wallet_gateway_login',
+    description:
+      "Log in to the enrolled gateway with the wallet passkey and obtain an OAuth access token (the passwordless second half of register). The agent IS the OAuth client (RFC 8252, PKCE public client — no client secret): it builds a WebAuthn assertion, SIGNS the on-chain FIDO-sign object on the SAFE (only the safe owner can — this is the real Level-3 proof Casdoor's ValidateObject checks), then exchanges the authorization code for a JWT. Returns the token + decoded claims (expect amr:[\"fido\"], aud=clientId) plus the on-chain object id/txHash that gated it. Requires a prior wallet_gateway_register. Signs on-chain (brings up SSP lazily).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: 'OAuth scope to request (default: read).' },
+        state: { type: 'string', description: 'OAuth state value (default: random).' },
+      },
+    },
+  },
+  {
+    name: 'wallet_gateway_api_call',
+    description:
+      "Call a 3rd-party REST API THROUGH the enrolled gateway, authorized by the wallet passkey — the agent never holds the upstream API key. The gateway injects the upstream credential (e.g. OpenRouter `Authorization: Bearer sk-or-…`) server-side and reverse-proxies after casbin-gating the passkey token. Pass the gateway `server` (e.g. `openrouter_api` or `organization_xyz/openrouter_api`), a `subpath` (e.g. `v1/chat/completions`), and an optional JSON `body`. Omit `accessToken` to perform a fresh passkey login (signs on-chain); pass one from a prior wallet_gateway_login to reuse it. Requires a prior wallet_gateway_register.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        server: {
+          type: 'string',
+          description: 'Gateway server: `owner/name` or just `name` (owner defaults to the active target org). E.g. `openrouter_api`.',
+        },
+        subpath: { type: 'string', description: 'Path appended to the server base URL, e.g. `v1/chat/completions`.' },
+        method: { type: 'string', description: 'HTTP method (default: POST when a body is given, else GET).' },
+        body: { type: 'object', description: 'JSON request body forwarded verbatim to the upstream API.' },
+        headers: { type: 'object', description: 'Optional extra request headers.' },
+        accessToken: { type: 'string', description: 'Reuse a passkey token from wallet_gateway_login instead of logging in again.' },
+        scope: { type: 'string', description: 'OAuth scope to request when logging in (only used when accessToken is omitted).' },
+      },
+      required: ['server'],
+    },
+  },
+  {
+    name: 'wallet_gateway_status',
+    description:
+      'Show the current gateway target and the enrolled passkey credential (client secret masked). Reports the resolved default-key account and whether the stored credential matches the active target. No network, no signing.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'wallet_gateway_logout',
+    description:
+      'Forget the local gateway target + enrolled credential so the next register starts clean. Does not delete the passkey on the remote gateway. No signing.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
@@ -492,7 +577,7 @@ const tools = [
 interface Deps {
   session: SessionManager;
   cache: SnapshotCache;
-  walletCli: string;
+  walletCli: WalletCliLauncher;
 }
 
 async function dispatch(deps: Deps, name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -703,6 +788,43 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return session.signPrompted(args, []);
     }
 
+    // ── Casdoor / gateway IDP ──
+    case 'wallet_gateway_register':
+      return gatewayRegister(input as RegisterInput);
+    case 'wallet_gateway_login': {
+      // Inject the two signing verbs the login needs. Both ride the standard
+      // prompt/proof flow through SSP (empty queue), so the HMAC key + private key
+      // stay sealed in the session — only the signed artifacts cross back here.
+      const signer: LoginSigner = {
+        signChallenge: (challengeHex: string) =>
+          session.signPrompted(['keys', 'sign-challenge', '--challenge', challengeHex], []),
+        createFidoObject: ({ safe, uuid, payloadHex }) =>
+          session.signPrompted(
+            ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast'],
+            [],
+          ),
+      };
+      return gatewayLogin(input as LoginInput, signer);
+    }
+    case 'wallet_gateway_api_call': {
+      // Same injected signer: a fresh login (when no accessToken is passed) needs
+      // to sign the on-chain FIDO object + the assertion via the sealed session.
+      const signer: LoginSigner = {
+        signChallenge: (challengeHex: string) =>
+          session.signPrompted(['keys', 'sign-challenge', '--challenge', challengeHex], []),
+        createFidoObject: ({ safe, uuid, payloadHex }) =>
+          session.signPrompted(
+            ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast'],
+            [],
+          ),
+      };
+      return gatewayApiCall(input as unknown as ApiCallInput, signer);
+    }
+    case 'wallet_gateway_status':
+      return gatewayStatus();
+    case 'wallet_gateway_logout':
+      return gatewayLogout();
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -718,10 +840,14 @@ async function doctor(): Promise<number> {
   const bins = resolveBins();
   out(`signing-server : ${bins.signingServer ?? '(MISSING)'}`);
   out(`ssp-util       : ${bins.sspUtil ?? '(MISSING)'}`);
-  out(`wallet-cli     : ${bins.walletCli ?? '(MISSING)'}`);
+  out(`wallet-cli     : ${bins.walletCli?.display ?? '(MISSING)'}`);
 
   const versions: Record<string, string> = {};
-  if (bins.walletCli) versions['wallet-cli'] = await tryVersion(bins.walletCli, ['--version']);
+  if (bins.walletCli)
+    versions['wallet-cli'] = await tryVersion(bins.walletCli.command, [
+      ...bins.walletCli.prefixArgs,
+      '--version',
+    ]);
   if (bins.sspUtil) versions['ssp-util'] = await tryVersion(bins.sspUtil, ['--version']);
   if (bins.signingServer) versions['signing-server'] = await tryVersion(bins.signingServer, ['--version']);
   for (const [k, v] of Object.entries(versions)) out(`  ${k} version: ${v}`);
@@ -794,7 +920,7 @@ function tcpReachable(host: string, port: number, timeoutMs: number): Promise<bo
  * dual-stack container and refuse). This internal call intentionally bypasses
  * the tool-boundary config lock — the model never reaches it.
  */
-async function ensureWalletConfig(walletCli: string): Promise<void> {
+async function ensureWalletConfig(walletCli: WalletCliLauncher): Promise<void> {
   const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
   if (existsSync(cfgPath)) return; // existing pointer — never clobber
   try {

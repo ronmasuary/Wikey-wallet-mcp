@@ -5,10 +5,12 @@
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import type { WalletCliLauncher } from './binPaths.js';
+
 const execFile = promisify(execFileCb);
 
 export interface RunQueryOpts {
-  walletCli: string;
+  walletCli: WalletCliLauncher;
   args: string[];
   timeoutMs?: number;
   /** A single line written to the child's stdin, then stdin is ended (EOF). */
@@ -19,7 +21,7 @@ export interface RunQueryOpts {
 
 export async function runQuery(opts: RunQueryOpts): Promise<string> {
   try {
-    const { stdout } = await execFile(opts.walletCli, opts.args, {
+    const { stdout } = await execFile(opts.walletCli.command, [...opts.walletCli.prefixArgs, ...opts.args], {
       timeout: opts.timeoutMs ?? 30_000,
       maxBuffer: 64 * 1024 * 1024, // snapshots can be hundreds of KB
       ...(opts.env ? { env: opts.env } : {}),
@@ -45,7 +47,7 @@ export async function runQuery(opts: RunQueryOpts): Promise<string> {
  */
 export function runWalletCliWithInput(opts: RunQueryOpts): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(opts.walletCli, opts.args, {
+    const child = spawn(opts.walletCli.command, [...opts.walletCli.prefixArgs, ...opts.args], {
       // Pipe stdin so we can answer the one confirmation prompt, then EOF.
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(opts.env ? { env: opts.env } : {}),

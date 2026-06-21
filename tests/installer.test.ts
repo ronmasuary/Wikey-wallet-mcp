@@ -89,8 +89,9 @@ test('locateInstallScript: package-bundled script resolves before the ~/.ssp fal
 });
 
 test('binsComplete: all three required', () => {
-  assert.equal(binsComplete({ signingServer: 'a', sspUtil: 'b', walletCli: 'c' }), true);
-  assert.equal(binsComplete({ signingServer: 'a', sspUtil: null, walletCli: 'c' }), false);
+  const wc = { command: 'c', prefixArgs: [], display: 'c' };
+  assert.equal(binsComplete({ signingServer: 'a', sspUtil: 'b', walletCli: wc }), true);
+  assert.equal(binsComplete({ signingServer: 'a', sspUtil: null, walletCli: wc }), false);
   assert.equal(binsComplete({ signingServer: null, sspUtil: null, walletCli: null }), false);
 });
 
