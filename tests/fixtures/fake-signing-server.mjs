@@ -59,5 +59,16 @@ const server = net.createServer((s) => s.end());
 const delay = parseInt(process.env.STUB_SPAWN_DELAY ?? '0', 10);
 setTimeout(() => server.listen(port, '127.0.0.1'), delay);
 
+// Unexpected-death simulation: after binding (so the session goes active),
+// emit a diagnostic line and self-exit with STUB_DIE_CODE. Exercises the live
+// exit-capture path (exit code + redacted output tail → wedgedReason / lastChildExit).
+const dieAfter = parseInt(process.env.STUB_DIE_AFTER_MS ?? '0', 10);
+if (dieAfter > 0) {
+  setTimeout(() => {
+    process.stderr.write('signing-server: fatal: KEK handle lost after resume\n');
+    process.exit(parseInt(process.env.STUB_DIE_CODE ?? '7', 10));
+  }, delay + dieAfter);
+}
+
 // Stay alive; default SIGTERM handling exits the process.
 setInterval(() => {}, 1 << 30);

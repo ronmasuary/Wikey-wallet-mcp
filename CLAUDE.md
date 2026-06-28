@@ -9,7 +9,9 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
 - `src/core/` — pure, transport-agnostic logic (unit-testable, no transport).
   - `session.ts` — SessionManager: sealed HMAC key Buffer, lazy/race-guarded
     `ensureSession`, own-child tracking, nonce lifecycle, auto-rotation timer,
-    wedged flag, shutdown.
+    wedged flag (+ `wedgedReason`/`lastChildExit` diagnostics from the captured
+    live-output ring), `recover()` (in-place cold-restart of a wedge, surfaced
+    as the `wallet_session_recover` tool), shutdown.
   - `proof.ts` / `signing.ts` / `query.ts` / `rotation.ts` — ported skill core.
   - `snapshot.ts` — ported parser/resolvers. `snapshotCache.ts` — B2 store.
   - `binPaths.ts` / `installer.ts` — binary resolution + KEK policy

@@ -56,7 +56,7 @@ interface Ctx {
 
 function setupEnv(port: number, extra: Record<string, string> = {}): Ctx {
   const dir = tmpDir();
-  const keys = ['STUB_PORT', 'STUB_WC', 'WIKEY_SSP_DIR', 'STUB_SPAWN_LOG', 'STUB_ROTATE_EXIT', 'STUB_CONCUR_FILE'];
+  const keys = ['STUB_PORT', 'STUB_WC', 'WIKEY_SSP_DIR', 'STUB_SPAWN_LOG', 'STUB_ROTATE_EXIT', 'STUB_CONCUR_FILE', 'STUB_DIE_AFTER_MS', 'STUB_DIE_CODE'];
   const prev: Record<string, string | undefined> = {};
   for (const k of keys) prev[k] = process.env[k];
   process.env.STUB_PORT = String(port);
@@ -220,8 +220,93 @@ test('fatal rotation (exit 4) wedges the session; further signing is refused', a
     await assert.rejects(s.rotateNow(), /SSP unreachable/);
     assert.equal(s.status().wedged, true);
     assert.equal(s.status().state, 'wedged');
+    assert.ok(s.status().wedgedReason?.includes('rotation failed'), `wedgedReason: ${s.status().wedgedReason}`);
     await assert.rejects(s.signPrompted([], []), /wedged/);
     s.shutdown();
+  } finally {
+    teardownEnv(ctx);
+  }
+});
+
+test('recover() clears a wedge in place and the next signing cold-starts', async () => {
+  const port = await freePort();
+  // Wedge via a fatal rotation, then heal without restarting the process and
+  // confirm signing works again — the in-process equivalent of an MCP restart.
+  const ctx = setupEnv(port, { STUB_ROTATE_EXIT: '4' });
+  try {
+    const { s, logs } = makeSession(port, ctx.dir);
+    await s.signPrompted([], []);
+    const firstPid = s.status().pid!;
+    await assert.rejects(s.rotateNow(), /SSP unreachable/);
+    assert.equal(s.status().wedged, true);
+
+    // Heal. STUB_ROTATE_EXIT only affects rotation, so a fresh sign succeeds.
+    s.recover();
+    const stAfter = s.status();
+    assert.equal(stAfter.wedged, false);
+    assert.equal(stAfter.state, 'no-session', 'recover is lazy — no spawn until next signing');
+
+    const out = await s.signPrompted([], []); // cold-starts a brand-new child
+    assert.equal(out, '{"ok":true}');
+    const healed = s.status();
+    assert.ok(healed.active, 'session should be active again after recovery');
+    assert.equal(healed.wedged, false);
+    assert.ok(logs.some((l) => l.includes('session recovered')), 'recovery is logged to stderr');
+
+    // wait for the wedged child to be reaped, then confirm a new child was spawned
+    for (let i = 0; i < 50 && alive(firstPid); i++) await sleep(20);
+    assert.equal(alive(firstPid), false, 'the dead/old child should be reaped on recover');
+    assert.notEqual(healed.pid, firstPid, 'a fresh child should own the recovered session');
+
+    s.shutdown();
+  } finally {
+    teardownEnv(ctx);
+  }
+});
+
+test('an unexpected child death captures exit code + output tail and a wedgedReason', async () => {
+  const port = await freePort();
+  // The child binds (session goes active), then self-exits code 7 with a
+  // diagnostic line — the live exit-capture path we rely on to learn WHY it wedged.
+  const ctx = setupEnv(port, { STUB_DIE_AFTER_MS: '150', STUB_DIE_CODE: '7' });
+  try {
+    const { s } = makeSession(port, ctx.dir);
+    await s.signPrompted([], []); // brings the child up
+    assert.ok(s.status().active);
+
+    // wait for the live child to die on its own and the exit handler to wedge us
+    for (let i = 0; i < 100 && !s.status().wedged; i++) await sleep(20);
+    const st = s.status();
+    assert.equal(st.wedged, true);
+    assert.equal(st.state, 'wedged');
+    assert.ok(st.wedgedReason?.includes('code=7'), `wedgedReason should name the code: ${st.wedgedReason}`);
+    assert.ok(st.lastChildExit, 'lastChildExit should be populated');
+    assert.equal(st.lastChildExit?.code, 7);
+    assert.match(st.lastChildExit?.output ?? '', /KEK handle lost after resume/);
+
+    // recover() clears wedgedReason but KEEPS lastChildExit as post-mortem history
+    s.recover();
+    const after = s.status();
+    assert.equal(after.wedged, false);
+    assert.equal(after.wedgedReason, null);
+    assert.ok(after.lastChildExit, 'lastChildExit retained across recover for diagnostics');
+    s.shutdown();
+  } finally {
+    teardownEnv(ctx);
+  }
+});
+
+test('recover() is a safe no-op once shutdown has been called', async () => {
+  const port = await freePort();
+  const ctx = setupEnv(port);
+  try {
+    const { s } = makeSession(port, ctx.dir);
+    await s.signPrompted([], []);
+    s.shutdown();
+    s.recover(); // must not resurrect a torn-down (process-exiting) manager
+    const st = s.status();
+    assert.equal(st.active, false);
+    assert.equal(st.wedged, false);
   } finally {
     teardownEnv(ctx);
   }

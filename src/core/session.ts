@@ -35,6 +35,7 @@ import {
 import { mintKey, runHmacRotation } from './rotation.js';
 import { runSigningPrompted, type PromptStep, type PromptedOpts } from './signing.js';
 import { runWalletCliWithInput } from './query.js';
+import { redact } from './redact.js';
 
 export interface SessionBins {
   signingServer: string;
@@ -63,6 +64,20 @@ export interface SessionStatus {
   kekProvider: 'auto' | 'env' | null;
   /** True when software KEK was reached via runtime fallback (no hardware). */
   kekFallback: boolean;
+  /**
+   * Why the session is wedged, if it is — a short, secret-redacted label
+   * (e.g. "signing-server exited (code=3, signal=null)" or "rotation failed: …").
+   * null when not wedged. Lets an agent/operator see WHY without reading logs.
+   */
+  wedgedReason: string | null;
+  /**
+   * Diagnostics from the most recent UNEXPECTED signing-server exit: the exit
+   * code/signal, a timestamp, and a redacted tail (~2 KB) of the child's last
+   * stdout+stderr. Retained across a recover() so the cause is still inspectable
+   * after self-heal; null until the child has died unexpectedly at least once.
+   * Never contains key material (redacted, and SSP never logs the key).
+   */
+  lastChildExit: { code: number | null; signal: string | null; ts: number; output: string } | null;
 }
 
 /** Internal: why a spawn attempt failed, for the fallback decision. */
@@ -94,6 +109,12 @@ export class SessionManager {
   private lastRotation: number | null = null;
   private effectiveKekProvider: 'auto' | 'env' | null = null;
   private kekFellBack = false;
+  /** Bounded ring (~2 KB) of the LIVE child's recent stdout+stderr, for the exit tail. */
+  private liveTail = '';
+  /** Diagnostics captured the last time the child died unexpectedly. */
+  private lastChildExit: { code: number | null; signal: string | null; ts: number; output: string } | null = null;
+  /** Short redacted label of why we wedged; cleared on recover/cold-start. */
+  private wedgedReason: string | null = null;
 
   constructor(cfg: SessionConfig) {
     this.bins = cfg.bins;
@@ -108,7 +129,12 @@ export class SessionManager {
   // ─── lazy session bring-up (race-guarded, init-once) ────────────────────────
 
   async ensureSession(): Promise<void> {
-    if (this.wedged) throw new Error('SSP session is wedged — restart the MCP server to recover.');
+    if (this.wedged)
+      throw new Error(
+        'SSP session is wedged (signing-server died or rotation failed). ' +
+          'Call wallet_session_recover to cold-restart the session in place — ' +
+          'no MCP-server restart needed.',
+      );
     if (this.key && this.child) return;
     if (this.initPromise) return this.initPromise;
 
@@ -161,8 +187,15 @@ export class SessionManager {
       }
     }
 
-    // Live: attach lifecycle handlers and drain the pipes (discard) so SSP's
-    // ongoing JSON logging can never fill the pipe buffer and block the child.
+    // Live: attach lifecycle handlers and drain the pipes so SSP's ongoing JSON
+    // logging can never fill the pipe buffer and block the child. We KEEP a
+    // bounded tail (instead of discarding) so an unexpected exit can report the
+    // child's dying words — that's how we learn WHY it wedged. Attaching a 'data'
+    // listener also flips the stream into flowing mode (no resume() needed).
+    this.liveTail = ''; // fresh child → fresh ring
+    const captureLive = (c: Buffer) => {
+      this.liveTail = (this.liveTail + c.toString()).slice(-2048);
+    };
     proc.on('error', () => {
       this.child = null;
       if (this.key) {
@@ -170,9 +203,9 @@ export class SessionManager {
         this.key = null;
       }
     });
-    proc.on('exit', () => this.handleChildExit(proc));
-    proc.stdout?.resume();
-    proc.stderr?.resume();
+    proc.on('exit', (code, signal) => this.handleChildExit(proc, code, signal));
+    proc.stdout?.on('data', captureLive);
+    proc.stderr?.on('data', captureLive);
 
     this.child = proc;
     this.key = key;
@@ -294,12 +327,22 @@ export class SessionManager {
     });
   }
 
-  private handleChildExit(proc: ChildProcess): void {
+  private handleChildExit(proc: ChildProcess, code: number | null, signal: NodeJS.Signals | null): void {
     if (this.shuttingDown) return;
     if (proc !== this.child) return; // a stale handle
-    // SSP died unexpectedly — the key is now useless. Per design, the session is
-    // over: zeroize, stop the timer, and wedge (no auto-restart; restart the MCP).
-    this.log('[wikey-wallet-mcp] signing-server exited unexpectedly — session wedged.');
+    // SSP died unexpectedly — the key is now useless. Per design the session is
+    // over: zeroize, stop the timer, and wedge. Recovery is wallet_session_recover
+    // (cold-start in place), no longer a full MCP restart. Capture the exit
+    // code/signal + a redacted tail of the child's last output so the cause is
+    // inspectable via wallet_session_status instead of lost.
+    const output = redact(this.liveTail).trim().slice(-2048);
+    this.lastChildExit = { code, signal, ts: Date.now(), output };
+    this.wedgedReason = `signing-server exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
+    this.log(
+      `[wikey-wallet-mcp] signing-server exited unexpectedly (code=${code ?? 'null'}, ` +
+        `signal=${signal ?? 'null'}) — session wedged.` +
+        (output ? ` last output: ${output.slice(-500)}` : ''),
+    );
     this.stopRotationTimer();
     if (this.key) {
       this.key.fill(0);
@@ -392,6 +435,7 @@ export class SessionManager {
       } catch (e) {
         // Wedged: stop the timer, refuse further signing, surface the error.
         this.wedged = true;
+        this.wedgedReason = `rotation failed: ${redact((e as Error).message ?? String(e))}`;
         this.stopRotationTimer();
         throw e;
       }
@@ -410,7 +454,45 @@ export class SessionManager {
       state: this.wedged ? 'wedged' : active ? 'active' : 'no-session',
       kekProvider: active ? this.effectiveKekProvider : null,
       kekFallback: active ? this.kekFellBack : false,
+      wedgedReason: this.wedged ? this.wedgedReason : null,
+      lastChildExit: this.lastChildExit,
     };
+  }
+
+  /**
+   * Recover a wedged session in place — the in-process equivalent of an MCP
+   * restart. Mirrors shutdown's teardown (zeroize key, kill OUR child only, stop
+   * the timer) but instead of marking the manager dead it clears the wedged flag
+   * and the init-once latch so the NEXT signing call cold-starts via doInit
+   * (fresh nonce + new key + fresh spawn — exactly what a process restart does).
+   *
+   * Safe because recovery is a deliberate, agent-invoked action, never an
+   * automatic respawn loop: if the underlying cause persists, the cold start
+   * fails with the real diagnostic, not the generic wedge message. No-op once
+   * shutdown() has been called (the process is going away).
+   */
+  recover(): void {
+    if (this.shuttingDown) return;
+    this.stopRotationTimer();
+    if (this.key) {
+      this.key.fill(0);
+      this.key = null;
+    }
+    if (this.child) {
+      try {
+        this.child.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      this.child = null;
+    }
+    this.initPromise = null;
+    this.lastRotation = null;
+    this.effectiveKekProvider = null;
+    this.kekFellBack = false;
+    this.wedged = false;
+    this.wedgedReason = null; // no longer wedged; keep lastChildExit as history
+    this.log('[wikey-wallet-mcp] session recovered — will cold-start on next signing call.');
   }
 
   /** Zeroize the key, kill OUR child only, clear the timer. Idempotent. */

@@ -138,12 +138,13 @@ script was found.
 
 ---
 
-## Tool surface (32 tools)
+## Tool surface (33 tools)
 
 Skill-compatible: the full skill surface **minus** `wallet_session_start` (the
 session now starts lazily on the first signing call) and `wallet_hmac_rotate`
-(rotation is automatic). Read-only `wallet_session_status` is kept, and three B2
-snapshot tools are added.
+(rotation is automatic). Read-only `wallet_session_status` is kept, the
+self-heal `wallet_session_recover` is added, and three B2 snapshot tools are
+added.
 
 - **Reads** (no SSP, no key): `wallet_chain_info`, `wallet_balance`,
   `wallet_balances`, `wallet_account`, `wallet_profile`, `wallet_assets`.
@@ -154,7 +155,8 @@ snapshot tools are added.
 - **Config:** `wallet_config_show`, `wallet_config_get`, `wallet_config_set`
   (security-critical keys **locked**), `wallet_config_init`,
   `wallet_config_reset`, `wallet_config_path`.
-- **Session:** `wallet_session_status`.
+- **Session:** `wallet_session_status` (state + wedge diagnostics),
+  `wallet_session_recover` (cold-restart a wedged session in place — see below).
 - **Signing** (lazily brings up SSP, auto-rotates): `wallet_tx_create_safe`,
   `wallet_tx_send`, `wallet_tx_create_transaction`, `wallet_tx_vote`,
   `wallet_tx_request_recovery`, `wallet_tx_approve_recovery`,
@@ -175,6 +177,50 @@ valid proof** without the sealed HMAC key. SSP returns **403** and the call
 fails (or times out with `TIMEOUT` after `wallet-cli`'s ~60s `signTimeout`) —
 it never signs. The security claim holds; the mechanism is "403 / no valid
 proof," not an indefinite stall.
+
+---
+
+## Recovering a "wedged" session (self-heal)
+
+For security, the session **fails safe**: if the signing-server child dies
+unexpectedly, or an automatic HMAC rotation fails, the live key is now useless,
+so the session refuses to sign and marks itself **wedged**. Reads still work;
+signing tools return an error containing the word `wedged`.
+
+**Recovery does not require restarting the MCP server (or the agent host).** The
+MCP server is a long-lived stdio child of the host — reloading the agent does
+**not** re-spawn it, which is why "just restart" historically didn't help. Call
+**`wallet_session_recover`** instead: it cold-restarts the session *in place*
+(zeroize the dead key, kill the dead signer child, fresh nonce + new key + fresh
+spawn — exactly what a process restart would do), then returns the
+post-recovery status. If the underlying cause persists, it surfaces the real
+spawn diagnostic rather than the generic wedge message.
+
+### Guidance for agent clients (please follow)
+
+> When a signing tool fails with a `wedged` error, **do not ask the end user to
+> restart the server or the agent.** Instead:
+> 1. call `wallet_session_recover` (optionally read `wallet_session_status`
+>    first — `wedgedReason` and `lastChildExit` explain *why* it wedged), then
+> 2. retry the original operation, and
+> 3. tell the user in one line that you recovered and retried.
+>
+> Recovery is safe and idempotent (equivalent to a restart; no key material
+> exposed; a no-op resync when not wedged), so it does not need a separate
+> confirmation step beyond the host's normal tool-permission prompt.
+
+### Operator note: skip the prompt
+
+By default an MCP host asks the end user to approve each tool call. To let the
+agent self-heal **without a prompt**, allowlist the recover tool in the host's
+permission settings — e.g. for Claude Code:
+
+```jsonc
+// .claude/settings.json
+{ "permissions": { "allow": ["mcp__wikey-wallet__wallet_session_recover"] } }
+```
+
+`wallet_session_status` is read-only and safe to allowlist alongside it.
 
 ---
 

@@ -258,7 +258,13 @@ const tools = [
   {
     name: 'wallet_session_status',
     description:
-      'Check the secure SSP session state. Returns { active, pid, wedged, lastRotation, state, kekProvider, kekFallback } — never any key material. kekProvider is the keys-at-rest provider the live signer came up with (auto=hardware, env=software); kekFallback is true when software was reached because no hardware enclave was found. The session starts automatically on the first signing call and the HMAC key auto-rotates; there is no manual start or rotate.',
+      'Check the secure SSP session state. Returns { active, pid, wedged, lastRotation, state, kekProvider, kekFallback, wedgedReason, lastChildExit } — never any key material. kekProvider is the keys-at-rest provider the live signer came up with (auto=hardware, env=software); kekFallback is true when software was reached because no hardware enclave was found. When wedged, wedgedReason gives a short redacted cause; lastChildExit ({code, signal, ts, output}) holds the diagnostics from the last unexpected signing-server exit (redacted tail) — read these to explain WHY it wedged. The session starts automatically on the first signing call and the HMAC key auto-rotates; there is no manual start or rotate. If wedged, call wallet_session_recover.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'wallet_session_recover',
+    description:
+      'Recover a wedged SSP session in place — call this when wallet_session_status reports wedged:true (or a signing tool fails with "session is wedged"). It cold-restarts the session inside the running server (zeroize old key, kill the dead signer child, fresh nonce + new key + fresh spawn) WITHOUT restarting the MCP server itself. Returns the post-recovery session status; if the underlying cause persists, it throws the real spawn diagnostic instead. Safe to call when not wedged (no-op resync). Never exposes key material.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   // ── Signing tools ──
@@ -663,6 +669,13 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     // ── session ──
     case 'wallet_session_status':
       return session.status();
+    case 'wallet_session_recover': {
+      // Clear the wedge + init latch, then cold-start so the agent gets immediate
+      // proof it's healthy (active:true) — or the real spawn error if it isn't.
+      session.recover();
+      await session.ensureSession();
+      return session.status();
+    }
 
     // ── signing ──
     case 'wallet_tx_create_safe': {
