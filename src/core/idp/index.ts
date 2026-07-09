@@ -8,4 +8,5 @@ export * from './identity.js';
 export * from './register.js';
 export * from './login.js';
 export * from './apiCall.js';
+export * from './mcpCall.js';
 export * from './manage.js';

@@ -52,10 +52,12 @@ import {
   gatewayLogout,
   gatewayLogin,
   gatewayApiCall,
+  gatewayMcpCall,
   type RegisterInput,
   type LoginInput,
   type LoginSigner,
   type ApiCallInput,
+  type McpCallInput,
 } from './core/idp/index.js';
 import { createConnection } from 'node:net';
 import { existsSync } from 'node:fs';
@@ -565,6 +567,27 @@ const tools = [
     },
   },
   {
+    name: 'wallet_gateway_mcp_call',
+    description:
+      "Call an MCP server THROUGH the enrolled gateway's MCP aggregator (`/api/mcp-gateway`), authorized by the wallet passkey — the agent never holds the upstream MCP credential. Unlike wallet_gateway_api_call (a REST reverse-proxy for API-category servers), this speaks MCP streamable-http: the aggregator connects to each granted upstream MCP itself (follows its transport redirects, injects the upstream credential e.g. Composio `x-api-key` server-side, tokenizes PII) and re-exposes every tool namespaced `<server>__<TOOL>`. Omit `tool` to list the federated tools; pass `tool` (e.g. `google-sheets-mcp__GOOGLESHEETS_VALUES_GET`) + `arguments` to call one. Omit `accessToken` to perform a fresh passkey login (signs on-chain); pass one from a prior wallet_gateway_login to reuse it. Requires a prior wallet_gateway_register.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tool: {
+          type: 'string',
+          description: 'Federated tool to call, namespaced `<server>__<TOOL>` (e.g. `google-sheets-mcp__GOOGLESHEETS_VALUES_GET`). Omit to list all tools.',
+        },
+        arguments: { type: 'object', description: 'Arguments object for the tools/call (ignored when `tool` is omitted).' },
+        method: { type: 'string', description: 'Advanced: raw JSON-RPC method override (e.g. `resources/list`). Wins over `tool`.' },
+        params: { type: 'object', description: 'Advanced: raw params for `method`.' },
+        path: { type: 'string', description: 'Aggregator path (default `/api/mcp-gateway`).' },
+        accessToken: { type: 'string', description: 'Reuse a passkey token from wallet_gateway_login instead of logging in again.' },
+        scope: { type: 'string', description: 'OAuth scope to request when logging in (only used when accessToken is omitted).' },
+        headers: { type: 'object', description: 'Optional extra request headers.' },
+      },
+    },
+  },
+  {
     name: 'wallet_gateway_status',
     description:
       'Show the current gateway target and the enrolled passkey credential (client secret masked). Reports the resolved default-key account and whether the stored credential matches the active target. No network, no signing.',
@@ -832,6 +855,22 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
           ),
       };
       return gatewayApiCall(input as unknown as ApiCallInput, signer);
+    }
+    case 'wallet_gateway_mcp_call': {
+      // Same injected signer as api_call: a fresh login (when no accessToken is
+      // passed) signs the on-chain FIDO object + assertion via the sealed session.
+      // The passkey JWT is the ONLY credential sent — the aggregator injects the
+      // upstream MCP credential server-side.
+      const signer: LoginSigner = {
+        signChallenge: (challengeHex: string) =>
+          session.signPrompted(['keys', 'sign-challenge', '--challenge', challengeHex], []),
+        createFidoObject: ({ safe, uuid, payloadHex }) =>
+          session.signPrompted(
+            ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast'],
+            [],
+          ),
+      };
+      return gatewayMcpCall(input as unknown as McpCallInput, signer);
     }
     case 'wallet_gateway_status':
       return gatewayStatus();
