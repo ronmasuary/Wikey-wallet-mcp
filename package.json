@@ -35,11 +35,11 @@
   "dependencies": {
     "@cosmjs/crypto": "^0.39.0",
     "@cosmjs/encoding": "^0.39.0",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^22",
+    "typescript": "^5"
   },
   "devDependencies": {
-    "@types/node": "^22",
-    "tsx": "^4",
-    "typescript": "^5"
+    "tsx": "^4"
   }
 }
