@@ -15,7 +15,12 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 
 import {
   SessionManager,
@@ -41,6 +46,7 @@ import {
   buildPolicyQueue,
   buildEditHelpersQueue,
   assertConfigSetAllowed,
+  buildGettingStarted,
   redact,
   type PolicyCondition,
   type QueryFilter,
@@ -67,6 +73,28 @@ import { createRequireResolveVersion } from './version.js';
 const SERVER_NAME = 'wikey-wallet-mcp';
 const SERVER_VERSION = createRequireResolveVersion();
 
+// ─── Orientation (Layer A) ────────────────────────────────────────────────────
+// Sent to the client in the `initialize` result and injected into the model's
+// context at connect time. Its job is to teach the ONBOARDING SEQUENCE and point
+// at the one tool that answers "what can I do next?" — NOT to re-list the tools
+// (the client already shows those). Keep it short; specifics live in each tool's
+// own description and in wallet_getting_started's live output.
+const SERVER_INSTRUCTIONS = `Wikey Wallet — a self-custody wallet + signing stack on the Omnistar chain. It
+manages signing keys, on-chain "safes" (accounts), users, governance policies,
+transactions, and passkey-authorized calls to 3rd-party APIs/MCPs via the gateway.
+Wikey never holds the keys.
+
+FIRST-RUN ONBOARDING IS A SEQUENCE — a brand-new user has nothing set up. Do it in order:
+  1. Create a signing key            → wallet_keys_create { setDefault: true }
+  2. Fund that key with OST gas       → the user sends OST to the key's address (required to broadcast anything)
+  3. Create a safe + username         → wallet_tx_create_safe
+  4. Then: add users, set policies, send assets, or enroll a gateway passkey.
+
+WHENEVER the user asks "what can I do?", "what's next?", "help", "how do I start?",
+or seems unsure — call wallet_getting_started FIRST. It inspects live state, reports
+exactly which of the steps above they're on, and returns the precise next action.
+Prefer it over guessing. Reads are free; signing lazily brings up the secure session.`;
+
 // ─── Tool surface ───────────────────────────────────────────────────────────
 // Full skill surface (32 tools) MINUS wallet_session_start (lazy) and
 // wallet_hmac_rotate (automatic); KEEP read-only wallet_session_status; ADD B2's
@@ -83,6 +111,13 @@ const SIGNING_KEY_PROP = {
 } as const;
 
 const tools = [
+  // ── Orientation (Layer B) ──
+  {
+    name: 'wallet_getting_started',
+    description:
+      'START HERE. Read-only onboarding guide that answers "what can I do next?" / "help" / "how do I start?". Inspects live state (keys, default key, funding, safes), classifies the exact onboarding stage (no-key → no-default → unfunded → no-safe → ready), and returns { stage, summary, next[], capabilities?[] } where next[] names the precise tool to call for the next step. Call this before guiding a new or unsure user. Never signs, never brings up the secure session.',
+    inputSchema: { type: 'object', properties: {} },
+  },
   // ── Query tools ──
   {
     name: 'wallet_chain_info',
@@ -601,6 +636,32 @@ const tools = [
   },
 ];
 
+// ─── Prompts (Layer C) ────────────────────────────────────────────────────────
+// User-initiated entry points the client surfaces in its UI (Claude Desktop's
+// "+"/attachment menu, etc.) — the discoverable "help" affordance for a user who
+// doesn't know what to type. Each prompt just steers the model to the live guide.
+
+const PROMPTS = [
+  {
+    name: 'getting-started',
+    title: 'Getting started with Wikey Wallet',
+    description: "Orient yourself: what this wallet does and your exact next step, based on your current setup.",
+  },
+  {
+    name: 'help',
+    title: 'What can I do with Wikey Wallet?',
+    description: 'List everything you can do with the wallet right now, given where you are in setup.',
+  },
+];
+
+function promptMessages(name: string): { role: 'user'; content: { type: 'text'; text: string } }[] {
+  const text =
+    name === 'help'
+      ? 'Using the Wikey Wallet MCP, call wallet_getting_started and then tell me, in plain language, everything I can do right now and what (if anything) I need to set up first. Present the next step(s) as a short numbered list.'
+      : 'I am new to the Wikey Wallet MCP and not sure how to begin. Call wallet_getting_started to check my current state, then explain what this wallet does and walk me through my single next step. Keep it short and concrete.';
+  return [{ role: 'user', content: { type: 'text', text } }];
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 interface Deps {
@@ -616,6 +677,10 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
   const query = (args: string[]) => runQuery({ walletCli, args, env: walletCliEnv() });
 
   switch (name) {
+    // ── orientation ──
+    case 'wallet_getting_started':
+      return buildGettingStarted(query, SERVER_NAME);
+
     // ── reads ──
     case 'wallet_chain_info':
       return query(['query', 'chain-info']);
@@ -947,6 +1012,7 @@ async function tryVersion(bin: string, args: string[]): Promise<string> {
 }
 
 function tcpReachable(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  
   return new Promise((resolve) => {
     const s = createConnection({ host, port });
     const done = (v: boolean) => {
@@ -1011,9 +1077,20 @@ async function main(): Promise<void> {
   const cache = new SnapshotCache();
   const deps: Deps = { session, cache, walletCli: bins.walletCli! };
 
-  const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: {}, prompts: {} }, instructions: SERVER_INSTRUCTIONS },
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+
+  // Prompts (Layer C): discoverable, user-initiated orientation entry points.
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: PROMPTS }));
+  server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+    const { name } = req.params;
+    if (!PROMPTS.some((p) => p.name === name)) throw new Error(`Unknown prompt: ${name}`);
+    return { messages: promptMessages(name) };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;

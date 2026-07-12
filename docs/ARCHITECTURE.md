@@ -265,3 +265,60 @@ graph TD
 A per-call `signingKey` on the signing tools resolves to `--creator/--pubkey`
 (via `keys get`), letting the agent sign with a chosen funded key when the
 default has drifted — without any wallet-cli change.
+
+## 8. Gateway (Casdoor) integration — REST vs MCP surfaces
+
+`src/core/idp/` lets the agent reach **third-party services through an enrolled
+gateway** (a Casdoor fork) authorized **only** by the wallet passkey — the agent
+never holds the upstream credential. The upstream API key / MCP `x-api-key` /
+OAuth secret stays on the gateway, which injects it server-side after casbin-gating
+the caller's short-lived passkey JWT.
+
+**Auth (identical for both surfaces).** `wallet_gateway_register` binds the
+passkey to the wallet's SAFE (recovery-proof); `wallet_gateway_login` mints an
+OAuth JWT by creating, **on-chain**, the FIDO-sign object Casdoor's `ValidateObject`
+checks (only the safe owner can — the real Level-3 proof). The signing rides the
+same sealed session as every other tool (`login.ts` takes an injected `LoginSigner`;
+the HMAC + private keys never cross the boundary). The minted JWT carries the
+caller's casbin permissions (`amr:["fido"]`) and is the ONLY credential sent
+downstream.
+
+**Two proxy surfaces, by `Server.Category`.** The gateway hosts registered
+`Server` objects on two different routes, and the wallet has one tool for each —
+they are **not** a fallback chain; the agent picks by what it is calling:
+
+| Tool | Route | For | Transport |
+| ---- | ----- | --- | --------- |
+| `wallet_gateway_api_call` (`apiCall.ts`) | `/api/server/{owner}/{name}/{subpath}` | **API-category** servers (e.g. OpenRouter) | one HTTP request in, raw response out |
+| `wallet_gateway_mcp_call` (`mcpCall.ts`) | `/api/mcp-gateway` | **MCP-category** servers (e.g. google-sheets via Composio) | full MCP `streamable-http` (`initialize` → `tools/list` / `tools/call`) |
+
+The REST proxy is a *transparent single-shot reverse-proxy* — perfect for a plain
+API, but it is **not an MCP client**. Point it at an MCP server and it just relays
+that server's own transport handshake back to the caller (e.g. Composio answers
+`307 → /v3/mcp/<id>/mcp`), which dead-ends: the relative redirect resolves to the
+gateway's SPA, and following it direct-to-upstream returns `401` because only the
+gateway holds the `x-api-key`.
+
+The aggregator (`/api/mcp-gateway`, `serverInfo: wikey-mcp-gateway`) is a **real
+MCP server** that connects to each granted upstream MCP itself — following its
+redirects, injecting the upstream credential server-side, and tokenizing PII —
+then re-exposes every tool namespaced `<server>__<TOOL>` (e.g.
+`google-sheets-mcp__GOOGLESHEETS_VALUES_GET`). It accepts the passkey JWT **alone**
+(no shared service key), deriving the PII user from the token. That is why MCP
+servers must go through `wallet_gateway_mcp_call`, not `wallet_gateway_api_call`.
+
+```mermaid
+graph TD
+    AG["Client agent"] -->|passkey JWT only| T1["wallet_gateway_api_call"]
+    AG -->|passkey JWT only| T2["wallet_gateway_mcp_call"]
+    T1 -->|"POST /api/server/{owner}/{name}"| RP["REST reverse-proxy<br/>(transparent, one-shot)"]
+    T2 -->|"MCP streamable-http<br/>/api/mcp-gateway"| AGG["MCP aggregator<br/>(wikey-mcp-gateway)"]
+    RP -->|inject API key server-side| API["API-category upstream<br/>(e.g. OpenRouter)"]
+    AGG -->|"follow redirects + inject x-api-key<br/>+ tokenize PII"| MCP["MCP-category upstream<br/>(e.g. Composio google-sheets)"]
+    AGG -. "re-exposes <server>__<TOOL>" .-> T2
+    classDef secret fill:#fff2c0,stroke:#b8860b;
+    class API,MCP secret;
+```
+
+Both tools acquire the token the same way: reuse an `accessToken` from a prior
+`wallet_gateway_login`, or omit it to perform a fresh on-chain login inline.
