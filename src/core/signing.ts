@@ -190,13 +190,19 @@ export async function runSigningPrompted(o: RunSigningOpts): Promise<string> {
 /**
  * Resolve an optional per-call signer. Given a key address, fetch its pubkey via
  * `keys get` and return `--creator <addr> --pubkey <b64>` for the dynamic
- * wallet-cli tx builder (tx.ts:719-720 honors these over the config default).
- * Omitted → `[]` (default key, back-compat). A bad/unknown key throws before any
- * signing is attempted. `query` is the caller's wallet-cli read runner (env-pinned).
+ * wallet-cli tx builder (tx.ts honors these over the config default). Omitted →
+ * `[]` (default key, back-compat). A bad/unknown key throws before any signing is
+ * attempted. `query` is the caller's wallet-cli read runner (env-pinned).
+ *
+ * `pubkeyOnly` emits just `--pubkey <b64>` (no `--creator`) for commands like
+ * `tx send`, whose signer is fixed by `--from` and which reject an unknown
+ * `--creator` option. Passing the matching pubkey is what actually routes the
+ * SSP proof/signature to `--from` instead of the config default key.
  */
 export async function resolveSignerArgs(
   query: (args: string[]) => Promise<string>,
   signingKey: unknown,
+  opts: { pubkeyOnly?: boolean } = {},
 ): Promise<string[]> {
   if (signingKey === undefined || signingKey === null || signingKey === '') return [];
   const addr = String(signingKey);
@@ -209,7 +215,7 @@ export async function resolveSignerArgs(
     throw new Error(`signingKey ${addr}: could not parse keys-get output to resolve its pubkey`);
   }
   if (!pubkey) throw new Error(`signingKey ${addr}: no pubkey found (is the key present in the signer?)`);
-  return ['--creator', addr, '--pubkey', pubkey];
+  return opts.pubkeyOnly ? ['--pubkey', pubkey] : ['--creator', addr, '--pubkey', pubkey];
 }
 
 // ─── Profile helper ─────────────────────────────────────────────────────────────

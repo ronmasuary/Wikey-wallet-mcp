@@ -29,8 +29,10 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
 - Raw snapshot JSON never returned to the model — only byte-budgeted derived
   rows (`maxResultBytes`, default 4 KB).
 - Kill only our own SSP child — never `pkill`.
-- Security-critical config keys are locked (`signer.*`, `*.url`, `apiKey`,
-  `kek*`, `keystore*`, `user.*`).
+- Security-critical config keys are locked by default (`signer.*`, `*.url`,
+  `apiKey`, `kek*`, `keystore*`, `user.*`). Operator escape hatch:
+  `WIKEY_UNLOCK_CONFIG=1` (operator env, not agent-controllable) bypasses the
+  lock entirely — this defeats H10, so only in a trusted environment.
 - Single state root: `WIKEY_SSP_DIR` (default `~/.ssp`) is the ONE persistence
   knob (operator, not agent). Keystore (`-keystore-dir <root>/keystore`) +
   wallet-cli config (via `HOME=<root>`) co-locate so key material and the

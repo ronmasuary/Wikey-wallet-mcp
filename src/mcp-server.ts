@@ -266,7 +266,7 @@ const tools = [
   {
     name: 'wallet_config_set',
     description:
-      'Set a config value by dot-path key. Security-critical keys are LOCKED and rejected: signer.* (signer.url is pinned to loopback), *.url, apiKey, kek*, keystore*, user.*. Reads (wallet_config_get/show) are always allowed.',
+      'Set a config value by dot-path key. Security-critical keys are LOCKED and rejected by default: signer.* (signer.url is pinned to loopback), *.url, apiKey, kek*, keystore*, user.*. Reads (wallet_config_get/show) are always allowed. The operator can bypass the lock by setting the WIKEY_UNLOCK_CONFIG=1 environment variable (not agent-controllable), allowing any key to be set.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -770,11 +770,17 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(['tx', 'create-safe', '--username', String(input.username), '--broadcast', ...signer], []);
     }
-    case 'wallet_tx_send':
+    case 'wallet_tx_send': {
+      // The signer for a bank send is the --from key (you can only spend your own
+      // funds), so resolve --from's pubkey and pass --pubkey. Without it wallet-cli
+      // signs with the config default key regardless of --from. `send` has no
+      // --creator option (it derives creator from --from), so pubkey-only here.
+      const signer = await resolveSignerArgs(query, input.from, { pubkeyOnly: true });
       return session.signPrompted(
-        ['tx', 'send', '--from', String(input.from), '--to', String(input.to), '--amount', String(input.amount), '--broadcast'],
+        ['tx', 'send', '--from', String(input.from), '--to', String(input.to), '--amount', String(input.amount), '--broadcast', ...signer],
         [],
       );
+    }
     case 'wallet_tx_create_transaction': {
       const { destination, to, amount, asset, feePriority, tokenAddress, chain, smallCoin } = input as {
         destination: string; to: string; amount: number; asset: string; feePriority: string;

@@ -85,6 +85,16 @@ gated. `wallet_config_set` hard-rejects security-critical keys server-side:
 `keystore*`, `user.*`. A prompt-injected model therefore cannot repoint the
 signer off-loopback or weaken at-rest protection. Reads of config remain free.
 
+**Operator escape hatch (`WIKEY_UNLOCK_CONFIG`).** An operator may set the
+`WIKEY_UNLOCK_CONFIG` env var (`1`/`true`/`yes`/`on`) to bypass the lock entirely,
+allowing the tool boundary to set *any* config key. This is an **operator** knob
+(same class as `WIKEY_SSP_DIR`) — it is not agent-controllable, and the lock stays
+**on by default**. Enabling it **defeats the H10 protection**: a prompt-injected
+model can then repoint `signer.url` off-loopback (talk to a hostile signer),
+weaken at-rest protection (`kek*`/`keystore*`), or move the default-key pointer.
+Turn it on only in a trusted, non-adversarial environment where the agent is not
+exposed to untrusted input.
+
 ### Lifecycle (H9)
 
 `stdin` EOF, `SIGTERM`, `SIGINT`, and `SIGHUP` all trigger `session.shutdown()`
