@@ -91,7 +91,7 @@ const CAPABILITIES = [
   'Send assets out of a safe: wallet_tx_create_transaction',
   'Add or remove users on a safe: wallet_tx_create_user / wallet_tx_delete_user',
   'Create or edit governance policies: wallet_tx_create_policy / wallet_tx_edit_policy',
-  'Set recovery helpers + threshold: wallet_tx_edit_helpers',
+  'View recovery helpers + threshold: wallet_recovery_helpers (read this first — helpers are the policy allowed_source; threshold is a % of the total helper count). Edit them: wallet_tx_edit_helpers',
   'Vote on governed objects: wallet_tx_vote',
   'Configure notifications: wallet_notification_configure',
   'Enroll a passkey to call 3rd-party APIs/MCPs through the gateway: wallet_gateway_register → wallet_gateway_login',

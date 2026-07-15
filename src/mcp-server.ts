@@ -509,14 +509,26 @@ const tools = [
     },
   },
   {
+    name: 'wallet_recovery_helpers',
+    description:
+      "AUTHORITATIVE list of the account's recovery helpers — call this to answer \"who are the helpers / who can approve a recovery?\" instead of reading it off wallet_profile yourself. Helpers are exactly the `allowed_source` of the policy-allow-updateUserAddress policy, and EVERY entry counts (including any address Wikey added as a default recovery path). Returns { helpers:[{address,name}], count, threshold:{percentage, requiredCount, totalHelpers} }. The on-chain threshold is a PERCENTAGE of the total helper count, so `requiredCount` is the decoded number of approvals needed. Read-only; call it BEFORE wallet_tx_edit_helpers so you know the current helpers and how adding/removing rescales the threshold.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'omnistar1... address (optional, uses config default)' },
+      },
+    },
+  },
+  {
     name: 'wallet_tx_edit_helpers',
-    description: 'Add/remove recovery helpers and set threshold. Helpers have no safe permissions — recovery only.',
+    description:
+      'Add/remove recovery helpers and set threshold. Helpers have no safe permissions — recovery only. Helpers are the `allowed_source` of policy-allow-updateUserAddress; call wallet_recovery_helpers FIRST to see the CURRENT helpers (existing/Wikey-added entries already count) before choosing a threshold. `threshold` is passed as an integer COUNT of helpers required, but is stored on-chain as a PERCENTAGE of the total, so adding/removing helpers rescales it (e.g. 1 of 2 helpers = 50%).',
     inputSchema: {
       type: 'object',
       properties: {
         addHelpers: { type: 'array', items: { type: 'string' }, description: 'Helper addresses/usernames to add' },
         removeHelpers: { type: 'array', items: { type: 'string' }, description: 'Helper addresses to remove (server resolves the numbered index)' },
-        threshold: { type: 'number', description: 'Number of helpers required for recovery (integer count, not percentage)' },
+        threshold: { type: 'number', description: 'Number of helpers required for recovery (integer count; stored on-chain as a percentage of total helpers)' },
         signingKey: SIGNING_KEY_PROP,
       },
       required: ['threshold'],
@@ -876,9 +888,58 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         [],
       );
     }
+    case 'wallet_recovery_helpers':
+      return query(['query', 'helpers', ...(input.address ? ['--address', String(input.address)] : [])]);
     case 'wallet_tx_edit_helpers': {
       const { addHelpers = [], removeHelpers = [], threshold } = input as { addHelpers?: string[]; removeHelpers?: string[]; threshold: number };
       const signer = await resolveSignerArgs(query, input.signingKey);
+
+      // Read a config value via the wallet-cli read runner (reads are never locked).
+      const cfgGet = async (key: string): Promise<string> => {
+        try {
+          const j = JSON.parse(await query(['config', 'get', key])) as { data?: { value?: string } };
+          return j?.data?.value ?? '';
+        } catch {
+          return '';
+        }
+      };
+      // The account whose helpers we're editing = the signer. Default key unless a
+      // per-call signingKey routes elsewhere.
+      const creator = input.signingKey ? String(input.signingKey) : await cfgGet('user.address');
+
+      // ── Isolate the two signings ────────────────────────────────────────────
+      // edit-helpers no longer registers the inbox channel inline: the prompt
+      // runner signs exactly once per wallet-cli process (it ends stdin after the
+      // first proof), so an inline inbox signing + the tx signing cannot coexist.
+      // Instead, if the account has no inbox channel yet, register it as its OWN
+      // isolated signing FIRST — and if that fails, do NOT add the recovery helper.
+      let hasInbox = false;
+      const apiServerUrl = await cfgGet('apiServerUrl');
+      if (apiServerUrl && creator) {
+        try {
+          const statusUrl =
+            `${apiServerUrl.replace(/\/$/, '')}/api/notification/inbox/status` +
+            `?address=${encodeURIComponent(creator)}`;
+          const resp = await fetch(statusUrl);
+          if (resp.ok) {
+            const body = (await resp.json()) as { inbox?: unknown };
+            hasInbox = body?.inbox === true;
+          }
+        } catch {
+          // Inconclusive (endpoint unreachable/undeployed) → fall through and
+          // register the inbox; registration is idempotent and fail-fast.
+          hasInbox = false;
+        }
+      }
+
+      if (!hasInbox) {
+        // Isolated signing #1 — inbox registration. A throw here aborts the whole
+        // tool call, so we never add a helper without a working inbox channel.
+        // (`notification configure` always signs with the default key.)
+        await session.signPrompted(['notification', 'configure', '--inbox', creator], []);
+      }
+
+      // Isolated signing #2 — the helper tx.
       return session.signPrompted(['tx', 'edit-helpers', '--broadcast', ...signer], buildEditHelpersQueue(addHelpers, removeHelpers, threshold));
     }
     case 'wallet_notification_configure': {
