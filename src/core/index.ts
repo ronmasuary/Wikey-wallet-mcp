@@ -7,6 +7,7 @@ export * from './signing.js';
 export * from './proof.js';
 export * from './query.js';
 export * from './gettingStarted.js';
+export * from './onboardSponsor.js';
 export * from './rotation.js';
 export * from './session.js';
 export * from './binPaths.js';

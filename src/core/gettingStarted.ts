@@ -101,10 +101,12 @@ function stepsFor(stage: Stage, p: ProbeResult): { summary: string; next: NextSt
   switch (stage) {
     case 'no-key':
       return {
-        summary: 'No signing key yet. This is step 1 of onboarding.',
+        summary:
+          'No signing key yet. This is step 1 of onboarding — the same for individual and sponsored/employee users; only the later funding step differs.',
         next: [
           {
-            action: 'Create your first signing key (set it as the default so signing works automatically).',
+            action:
+              'Create your first signing key (set it as the default so signing works automatically). A key is required either way; whether you fund it yourself or your organization sponsors it is decided at the funding step.',
             tool: 'wallet_keys_create',
             args: { setDefault: true },
           },
@@ -124,10 +126,16 @@ function stepsFor(stage: Stage, p: ProbeResult): { summary: string; next: NextSt
       };
     case 'unfunded':
       return {
-        summary: `Default key ${p.defaultKey} has no OST. It needs gas before it can create anything on-chain.`,
+        summary: `Default key ${p.defaultKey} has no OST. It needs gas before it can create anything on-chain — fund it yourself, or have your organization sponsor it.`,
         next: [
           {
-            action: `Fund the key by sending OST to ${p.defaultKey} (from an exchange, faucet, or another funded key via wallet_tx_send), then run wallet_getting_started again.`,
+            action: `Individual: fund the key by sending OST to ${p.defaultKey} (from an exchange, faucet, or another funded key via wallet_tx_send), then run wallet_getting_started again.`,
+          },
+          {
+            action:
+              'Sponsored / employee: if your organization gave you an invitation link, you do NOT fund the key yourself — give that link to your agent and it will call wallet_onboard_sponsor with it. That one call funds the key, creates your account (safe), and enrolls your gateway passkey.',
+            tool: 'wallet_onboard_sponsor',
+            args: { invite: '<the invitation link from your organization>' },
           },
           {
             action: 'Check the balance to confirm funds arrived.',
@@ -172,18 +180,18 @@ function stepsFor(stage: Stage, p: ProbeResult): { summary: string; next: NextSt
 export async function buildGettingStarted(
   query: (args: string[]) => Promise<string>,
   serverName: string,
+  listKeys: () => string[],
 ): Promise<GettingStartedReport> {
   const notes: string[] = [];
 
-  let keyCount = 0;
-  let keyAddresses: string[] = [];
-  try {
-    const raw = await query(['keys', 'list']);
-    keyAddresses = extractAddresses(raw);
-    keyCount = keyAddresses.length;
-  } catch {
-    notes.push('Could not list keys (signer may be unreachable). Assuming none.');
-  }
+  // Count keys from the keystore DIRECTORY, not via `keys list` (which is an HTTP
+  // call into the signing-server and fails when SSP is idle). The address is the
+  // key filename, so this read is accurate whether or not the signer is up — and
+  // it never brings SSP up. This is what stops an unreachable signer from being
+  // misreported as "no-key" (an empty keystore genuinely means no keys). Only
+  // *signing* needs the server; asking "what do I have" does not.
+  const keyAddresses = listKeys();
+  const keyCount = keyAddresses.length;
 
   let defaultKey: string | undefined;
   if (keyCount > 0) {

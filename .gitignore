@@ -10,3 +10,5 @@ dist/
 install-child-mode.cjs
 
 .vscode/settings.json
+
+docs/

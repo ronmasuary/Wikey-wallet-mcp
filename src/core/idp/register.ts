@@ -11,7 +11,7 @@
 
 import { loadCfg } from './config.js';
 import { loadTarget, saveTarget, targetPrevFile, saveCredential, type Target } from './target.js';
-import { resolveWalletIdentity } from './identity.js';
+import { resolveWalletIdentity, waitForWalletIdentity, readAccountAddress } from './identity.js';
 import { passwordLogin, signupWithInvitation } from './casdoorSession.js';
 import { buildAttestation } from './webauthn.js';
 import { randomBytes } from 'node:crypto';
@@ -29,6 +29,17 @@ export interface RegisterInput {
   origin?: string;
   invitationCode?: string;
   password?: string;
+  /**
+   * Bind the passkey to THIS account address instead of the config default-key
+   * pointer (see resolveWalletIdentity). Set by sponsor onboarding, which knows
+   * which key it just created the safe on; normal enrollment leaves it unset.
+   */
+  account?: string;
+  /**
+   * Wait for the account's safe to become queryable instead of failing fast.
+   * Needed when enrollment follows create-safe in the same call (~30s validation).
+   */
+  waitForSafe?: boolean;
 }
 
 const TARGET_KEYS: (keyof Target)[] = [
@@ -64,6 +75,21 @@ async function resolveInvite(link: string): Promise<InviteDerived> {
   }
   const appId = application.includes('/') ? application : `admin/${application}`;
   const derived: InviteDerived = { host, application, invitationCode };
+
+  // A self-contained link carries the wallet handle as username@organization
+  // (e.g. kehat@wikey). For Casdoor enrollment we need the *local* part as the
+  // username and the domain as the org — used only as a fallback, since
+  // /api/get-invitation-info (below) is authoritative and overrides these.
+  const urlUsername = u.searchParams.get('username') || '';
+  if (urlUsername) {
+    const at = urlUsername.indexOf('@');
+    if (at > 0) {
+      derived.username = urlUsername.slice(0, at);
+      derived.organization = urlUsername.slice(at + 1);
+    } else {
+      derived.username = urlUsername;
+    }
+  }
 
   // Invitation → organization (owner) + pinned username.
   try {
@@ -179,7 +205,9 @@ export async function gatewayRegister(input: RegisterInput): Promise<RegisterRes
   }
 
   const cfg = loadCfg(saved);
-  const id = await resolveWalletIdentity(cfg);
+  const id = input.waitForSafe
+    ? await waitForWalletIdentity(cfg, input.account || readAccountAddress(cfg))
+    : await resolveWalletIdentity(cfg, input.account);
 
   // 1. bootstrap session (signup-with-code preferred; password for existing users)
   let jar;

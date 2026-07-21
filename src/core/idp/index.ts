@@ -10,3 +10,5 @@ export * from './login.js';
 export * from './apiCall.js';
 export * from './mcpCall.js';
 export * from './manage.js';
+export * from './sponsorFund.js';
+export * from './sponsorGrants.js';

@@ -76,9 +76,18 @@ function findObject(snapshot: Snapshot, predicate: (o: SnapshotObject) => boolea
   return null;
 }
 
-/** Resolve the agent's wallet identity (account, safe, ecPuk, x/y) for Casdoor. */
-export async function resolveWalletIdentity(cfg: Cfg): Promise<WalletIdentity> {
-  const account = readAccountAddress(cfg);
+/**
+ * Resolve the agent's wallet identity (account, safe, ecPuk, x/y) for Casdoor.
+ *
+ * `explicitAccount` overrides both CASDOOR_ACCOUNT and the config default-key
+ * pointer. Sponsor onboarding needs it: it knows exactly which key it just
+ * onboarded, and on a resumed run that key is not necessarily the config default
+ * (a previous attempt may have left a newer key as the default). Passing the
+ * address makes enrollment bind to the safe we actually created rather than to
+ * whatever the pointer happens to say.
+ */
+export async function resolveWalletIdentity(cfg: Cfg, explicitAccount?: string): Promise<WalletIdentity> {
+  const account = explicitAccount || readAccountAddress(cfg);
 
   const accountSnap = await fetchSnapshot(cfg, account);
   const profile = findObject(accountSnap, (o) => o.class === 'profile' && !!o.object?.safes?.length);
@@ -100,6 +109,55 @@ export async function resolveWalletIdentity(cfg: Cfg): Promise<WalletIdentity> {
     x: Buffer.from(buf.subarray(1, 33)),
     y: Buffer.from(buf.subarray(33, 65)),
   };
+}
+
+/**
+ * Poll until `account`'s profile → safe → ecPuk chain resolves on-chain.
+ *
+ * create-safe broadcasts and returns before the safe is queryable — validation
+ * takes ~30s — so anything that must run immediately after it (notably passkey
+ * enrollment, which needs the safe's ecPuk as the credential public key) has to
+ * wait rather than fail. Every attempt is retried, including a snapshot HTTP
+ * error: right after broadcast the node legitimately has nothing to serve yet.
+ * The last error is re-thrown once the budget runs out, so a genuine failure
+ * still surfaces its real cause.
+ *
+ * `initialDelayMs` skips the doomed early polls entirely: the first requests can
+ * only fail, so waiting first cuts pointless round-trips (and the identical "no
+ * profile" errors they log) without delaying success. It also keeps `lastError`
+ * meaningful: the reported cause is then a real post-validation failure, not the
+ * first "nothing on chain yet" blip.
+ *
+ * Budget sizing — the safe does NOT appear ~30s after broadcast, as the original
+ * estimate here assumed. The profile's `safes[]` is written by a SEPARATE, LATER
+ * `addSafe` tx than the create-safe tx, and a mainnet onboarding on 2026-07-21
+ * took ~2min end to end. The previous ≈110s budget therefore expired on a
+ * perfectly healthy onboarding and reported it as `created-enroll-failed`, even
+ * though a manual enroll moments later succeeded. Default budget is now
+ * ≈ 30s + 42×5s = 240s (4min) — roughly 2× the observed worst case. Timing out
+ * here is not fatal: the caller keeps the on-chain work and retries only the
+ * enrollment, so a generous budget costs nothing but a slower failure.
+ */
+export async function waitForWalletIdentity(
+  cfg: Cfg,
+  account: string,
+  { attempts = 43, intervalMs = 5000, initialDelayMs = 30_000 } = {},
+): Promise<WalletIdentity> {
+  if (initialDelayMs > 0) await new Promise((r) => setTimeout(r, initialDelayMs));
+
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await resolveWalletIdentity(cfg, account);
+    } catch (e) {
+      lastError = e;
+      // No sleep after the final attempt — it would just delay the throw.
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+  throw new Error(
+    `safe for account ${account} did not become queryable in time: ${(lastError as Error)?.message ?? lastError}`,
+  );
 }
 
 /** Poll the safe snapshot until an object with the given id is valid & not deleted. */

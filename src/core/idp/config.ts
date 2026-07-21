@@ -22,6 +22,8 @@ export interface Cfg {
   env: string;
   snapshotSecure: boolean;
   account?: string;
+  /** Wikey proxy base URL for the pre-passkey sponsor-fund call. */
+  proxyUrl: string;
 }
 
 const env = (k: string): string | undefined =>
@@ -51,5 +53,8 @@ export function loadCfg(overrides: Target = {}): Cfg {
     env: env('WIKEY_ENV') ?? 'main',
     snapshotSecure: env('WIKEY_SECURE') !== 'false',
     account: env('CASDOOR_ACCOUNT'),
+    // Wikey proxy base (funding). Default = mainnet lab; override per environment
+    // (e.g. a testnet lab or localhost) with WIKEY_PROXY_URL.
+    proxyUrl: pick('WIKEY_PROXY_URL', 'proxyUrl', 'https://reverse-proxy.omnistar.io/mainnet/proxy').replace(/\/$/, ''),
   };
 }

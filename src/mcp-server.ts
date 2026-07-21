@@ -35,6 +35,7 @@ import {
   walletHome,
   stateRoot,
   keystoreDir,
+  listKeystoreAddresses,
   parseSnapshot,
   findSafe,
   extractGroupsFromSafe,
@@ -47,6 +48,7 @@ import {
   buildEditHelpersQueue,
   assertConfigSetAllowed,
   buildGettingStarted,
+  onboardSponsor,
   redact,
   type PolicyCondition,
   type QueryFilter,
@@ -59,6 +61,8 @@ import {
   gatewayLogin,
   gatewayApiCall,
   gatewayMcpCall,
+  loadCfg,
+  resolveWalletIdentity,
   type RegisterInput,
   type LoginInput,
   type LoginSigner,
@@ -318,6 +322,22 @@ const tools = [
         signingKey: SIGNING_KEY_PROP,
       },
       required: ['username'],
+    },
+  },
+  {
+    name: 'wallet_onboard_sponsor',
+    description:
+      'Redeem an invitation link — the COMPLETE sponsored onboarding in one call. Use this whenever a user hands you an invitation/signup link and asks to redeem or use it. It (1) creates a signing key, (2) funds it from the sponsor grant behind the invite code (the invitee never funds anything), (3) creates their account + safe under the invite\'s username@organization handle, and (4) enrolls the wallet passkey to the gateway with the same code. Takes a few minutes: the safe needs ~30s to validate on-chain before enrollment can bind to it. Stage "funded-created-enrolled" = fully done; "created-enroll-failed" = on-chain work done, retry only wallet_gateway_register; "recovery-required" = the invite already onboarded an account. Safe to re-run with the same link: it RESUMES an interrupted onboarding on the already-funded key instead of creating a second identity.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        invite: {
+          type: 'string',
+          description:
+            'The full invitation link, e.g. https://gateway.wikey.io/signup/{app}?invitationCode=…&username=kehat@wikey',
+        },
+      },
+      required: ['invite'],
     },
   },
   {
@@ -691,7 +711,9 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
   switch (name) {
     // ── orientation ──
     case 'wallet_getting_started':
-      return buildGettingStarted(query, SERVER_NAME);
+      // Keys are counted from the keystore directory (listKeystoreAddresses),
+      // never via the signer — so an idle SSP session is never misread as no-key.
+      return buildGettingStarted(query, SERVER_NAME, listKeystoreAddresses);
 
     // ── reads ──
     case 'wallet_chain_info':
@@ -781,6 +803,43 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     case 'wallet_tx_create_safe': {
       const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(['tx', 'create-safe', '--username', String(input.username), '--broadcast', ...signer], []);
+    }
+    case 'wallet_onboard_sponsor': {
+      const result = await onboardSponsor(String(input.invite), {
+        query,
+        // keys create signs over the signer HTTP API and ends with a y/n default
+        // prompt — answer 'y' via runWithSession (same as wallet_keys_create).
+        createDefaultKey: () => session.runWithSession(['keys', 'create'], { input: 'y\n' }),
+        // Sign with the onboarded address EXPLICITLY (--creator/--pubkey) rather
+        // than the ambient default: a resumed run adopts the previously funded
+        // key, which is not necessarily what user.address points at.
+        createSafe: async (username, allowOrg, address) => {
+          const signer = await resolveSignerArgs(query, address);
+          const args = ['tx', 'create-safe', '--username', username, '--broadcast', ...signer];
+          if (allowOrg) args.push('--allow-org-username');
+          return session.signPrompted(args, []);
+        },
+        listKeys: listKeystoreAddresses,
+        // Chain-truth check for a resumed run: does this key already have a
+        // profile+safe? Reads the snapshot node directly by address (no default-key
+        // dependency, no SSP session). Any failure means "not yet" — the caller
+        // only uses this to SKIP work, so failing closed just redoes create-safe.
+        safeExists: async (address) => {
+          try {
+            await resolveWalletIdentity(loadCfg(), address);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        // Wait for on-chain validation only when create-safe just broadcast; a
+        // resumed run already confirmed the safe is queryable via safeExists.
+        enroll: async (invite, address, { safeIsNew }) => {
+          const reg = await gatewayRegister({ invite, account: address, waitForSafe: safeIsNew });
+          return { safe: reg.safe, username: reg.username, organization: reg.organization };
+        },
+      });
+      return JSON.stringify(result, null, 2);
     }
     case 'wallet_tx_send': {
       // The signer for a bank send is the --from key (you can only spend your own

@@ -1,12 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { SessionManager } from '../src/core/session.js';
-import { stateRoot, keystoreDir, walletHome, walletCliEnv } from '../src/core/binPaths.js';
+import {
+  stateRoot,
+  keystoreDir,
+  walletHome,
+  walletCliEnv,
+  listKeystoreAddresses,
+} from '../src/core/binPaths.js';
 
 const SIGNING = fileURLToPath(new URL('./fixtures/fake-signing-server.mjs', import.meta.url));
 const SSP = fileURLToPath(new URL('./fixtures/fake-ssp-util.mjs', import.meta.url));
@@ -58,6 +64,37 @@ test('stateRoot defaults to ~/.ssp when WIKEY_SSP_DIR is unset', () => {
     delete process.env.WIKEY_SSP_DIR;
     assert.equal(stateRoot(), path.join(homedir(), '.ssp'));
     assert.equal(keystoreDir(), path.join(homedir(), '.ssp', 'keystore'));
+  } finally {
+    if (prev === undefined) delete process.env.WIKEY_SSP_DIR;
+    else process.env.WIKEY_SSP_DIR = prev;
+  }
+});
+
+test('listKeystoreAddresses reads addresses from key filenames, skipping non-key files', () => {
+  const prev = process.env.WIKEY_SSP_DIR;
+  const dir = mkdtempSync(path.join(tmpdir(), 'wmcp-ks-'));
+  try {
+    process.env.WIKEY_SSP_DIR = dir;
+    mkdirSync(keystoreDir(), { recursive: true });
+    const A = 'omnistar10wukj8gggxmu249zqhth67n6m7tvnvnssj49qs';
+    const B = 'omnistar1m756hagxk040tqvgazldxgg0nua66pqmj03uy4';
+    writeFileSync(path.join(keystoreDir(), `${A}.enc`), 'x'); // secure format
+    writeFileSync(path.join(keystoreDir(), `${B}.json`), 'x'); // legacy format
+    writeFileSync(path.join(keystoreDir(), 'kek.dpapi'), 'x'); // KEK, not a key
+    writeFileSync(path.join(keystoreDir(), 'dev.kek'), 'x'); // KEK, not a key
+    assert.deepEqual(listKeystoreAddresses().sort(), [A, B].sort());
+  } finally {
+    if (prev === undefined) delete process.env.WIKEY_SSP_DIR;
+    else process.env.WIKEY_SSP_DIR = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('listKeystoreAddresses returns [] when the keystore dir is absent', () => {
+  const prev = process.env.WIKEY_SSP_DIR;
+  try {
+    process.env.WIKEY_SSP_DIR = path.join(tmpdir(), 'wmcp-ks-does-not-exist-xyz');
+    assert.deepEqual(listKeystoreAddresses(), []);
   } finally {
     if (prev === undefined) delete process.env.WIKEY_SSP_DIR;
     else process.env.WIKEY_SSP_DIR = prev;

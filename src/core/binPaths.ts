@@ -10,7 +10,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { accessSync, constants, readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -56,6 +56,36 @@ export function stateRoot(): string {
 /** Directory the SSP secure keystore is pinned to (`-keystore-dir`). */
 export function keystoreDir(): string {
   return path.join(stateRoot(), 'keystore');
+}
+
+// A keystore entry is named after the address it holds: `<address>.enc` (secure
+// format) or a legacy `<address>.json`. Non-key files (`kek.dpapi`, `dev.kek`)
+// don't start with the address prefix, so this pattern skips them.
+const KEYSTORE_FILE_RE = /^(omnistar1[0-9a-z]{6,})\.(enc|json)$/i;
+
+/**
+ * List signing-key addresses by reading the keystore directory directly, WITHOUT
+ * the signing-server. The address IS the filename, so a key's *identity* is
+ * available from the filesystem with zero decryption and no running SSP session
+ * (only *using* a key — decrypting its private material to sign — needs the
+ * server + KEK). This lets read-only callers (e.g. wallet_getting_started) count
+ * keys accurately even when SSP is idle, instead of misreading an unreachable
+ * signer as "no keys". Returns [] when the keystore dir is absent/unreadable —
+ * which for key-counting genuinely means "no keys yet".
+ */
+export function listKeystoreAddresses(): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(keystoreDir());
+  } catch {
+    return [];
+  }
+  const addrs = new Set<string>();
+  for (const name of entries) {
+    const m = KEYSTORE_FILE_RE.exec(name);
+    if (m?.[1]) addrs.add(m[1]);
+  }
+  return [...addrs];
 }
 
 /**

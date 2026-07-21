@@ -90,6 +90,27 @@ interface SpawnFailure {
   cause?: Error;
 }
 
+/**
+ * Coerce an unknown rejection into a SpawnFailure.
+ *
+ * `attemptSpawn` rejects with a real SpawnFailure on the paths it controls, but
+ * a throw from anywhere else (binary resolution, a synchronous spawn error)
+ * arrives as a plain Error with no `output`. Casting that to SpawnFailure made
+ * the error HANDLER itself crash on `output.trim()` — replacing the real spawn
+ * diagnostic with "Cannot read properties of undefined". Normalizing here keeps
+ * the true cause intact, which is the whole point of this error path.
+ */
+function toSpawnFailure(e: unknown): SpawnFailure {
+  if (typeof e === 'object' && e !== null && typeof (e as SpawnFailure).output === 'string') {
+    return e as SpawnFailure;
+  }
+  return {
+    earlyExit: false,
+    output: '',
+    cause: e instanceof Error ? e : new Error(String(e)),
+  };
+}
+
 export class SessionManager {
   private readonly bins: SessionBins;
   private readonly nonceFile: string;
@@ -163,7 +184,7 @@ export class SessionManager {
     try {
       proc = await this.attemptSpawn(kek, key);
     } catch (e) {
-      const f = e as SpawnFailure;
+      const f = toSpawnFailure(e);
       // Fall back to the persisted software KEK once, but ONLY when the primary
       // was hardware AND SSP reported no usable KEK at boot. SSP logs that marker
       // to its STDOUT via slog-JSON (main.go:40) — attemptSpawn scans both
@@ -179,7 +200,7 @@ export class SessionManager {
           proc = await this.attemptSpawn(kek, key);
         } catch (e2) {
           key.fill(0);
-          throw this.spawnFailureToError(e2 as SpawnFailure);
+          throw this.spawnFailureToError(toSpawnFailure(e2));
         }
       } else {
         key.fill(0);
@@ -301,7 +322,9 @@ export class SessionManager {
 
   private spawnFailureToError(f: SpawnFailure): Error {
     const base = f.cause?.message ?? `signing-server exited (code ${f.exitCode ?? '?'})`;
-    const tail = f.output.trim();
+    // Defensive: this is the last stop before the user sees an error, so it must
+    // never be the thing that throws.
+    const tail = (f.output ?? '').trim();
     return new Error(tail ? `${base}\n${tail.slice(-500)}` : base);
   }
 

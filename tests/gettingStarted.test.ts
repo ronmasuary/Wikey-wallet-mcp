@@ -46,8 +46,8 @@ test('classifyStage treats unknown funding (no safe) as no-safe, not stuck', () 
 });
 
 test('buildGettingStarted: brand-new install classifies no-key and names the create tool', async () => {
-  const query = async () => ''; // keys list empty
-  const r = await buildGettingStarted(query, 'wikey-wallet-mcp');
+  const query = async () => '';
+  const r = await buildGettingStarted(query, 'wikey-wallet-mcp', () => []); // empty keystore
   assert.equal(r.stage, 'no-key');
   assert.equal(r.keyCount, 0);
   const [firstStep] = r.next;
@@ -59,14 +59,13 @@ test('buildGettingStarted: brand-new install classifies no-key and names the cre
 
 test('buildGettingStarted: ready state lists capabilities', async () => {
   const query = async (args: string[]): Promise<string> => {
-    if (args[0] === 'keys' && args[1] === 'list') return ADDR;
     if (args[0] === 'config') return ADDR; // config get user.address
     if (args[1] === 'balance') return '{"data":{"balances":[{"amount":"5000"}]}}';
     if (args[1] === 'snapshot')
       return JSON.stringify({ data: { snapshot: [{ address: SAFE, name: 'alice', groups: [] }] } });
     return '';
   };
-  const r = await buildGettingStarted(query, 'wikey-wallet-mcp');
+  const r = await buildGettingStarted(query, 'wikey-wallet-mcp', () => [ADDR]);
   assert.equal(r.stage, 'ready');
   assert.equal(r.safes[0]?.address, SAFE);
   assert.ok(r.capabilities && r.capabilities.length > 0);
@@ -74,13 +73,30 @@ test('buildGettingStarted: ready state lists capabilities', async () => {
 
 test('buildGettingStarted: funded key without a safe points at create-safe', async () => {
   const query = async (args: string[]): Promise<string> => {
-    if (args[0] === 'keys' && args[1] === 'list') return ADDR;
     if (args[0] === 'config') return ADDR;
     if (args[1] === 'balance') return '{"data":{"balances":[{"amount":"5000"}]}}';
     if (args[1] === 'snapshot') throw new Error('no profile on-chain yet');
     return '';
   };
-  const r = await buildGettingStarted(query, 'wikey-wallet-mcp');
+  const r = await buildGettingStarted(query, 'wikey-wallet-mcp', () => [ADDR]);
   assert.equal(r.stage, 'no-safe');
   assert.equal(r.next[0]?.tool, 'wallet_tx_create_safe');
+});
+
+test('buildGettingStarted: counts keys from the keystore even when the signer is DOWN', async () => {
+  // Regression: a `keys list` that throws (signing-server unreachable) must NOT
+  // be misread as an empty wallet. Key count comes from the keystore directory,
+  // so existing keys are still seen and the stage is never a false no-key.
+  const query = async (args: string[]): Promise<string> => {
+    if (args[0] === 'keys') throw new Error('fetch failed'); // signer down
+    if (args[0] === 'config') return ADDR; // local config read still works
+    if (args[1] === 'balance') return '{"data":{"balances":[{"amount":"5000"}]}}';
+    if (args[1] === 'snapshot')
+      return JSON.stringify({ data: { snapshot: [{ address: SAFE, name: 'alice', groups: [] }] } });
+    return '';
+  };
+  const r = await buildGettingStarted(query, 'wikey-wallet-mcp', () => [ADDR]);
+  assert.equal(r.keyCount, 1);
+  assert.notEqual(r.stage, 'no-key');
+  assert.equal(r.stage, 'ready');
 });

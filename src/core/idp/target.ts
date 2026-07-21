@@ -38,6 +38,9 @@ export const TARGET_FIELDS = [
   'clientId',
   'clientSecret',
   'redirectUri',
+  // Wikey proxy base URL used for the pre-passkey sponsor-fund call (funding goes
+  // direct to the proxy, not through the gateway). Overridable via WIKEY_PROXY_URL.
+  'proxyUrl',
 ] as const;
 
 export type TargetField = (typeof TARGET_FIELDS)[number];
