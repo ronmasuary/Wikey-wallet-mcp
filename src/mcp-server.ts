@@ -212,6 +212,20 @@ const tools = [
     },
   },
   {
+    name: 'wallet_snapshot_object',
+    description:
+      'Read ONE object from a cached snapshot COMPLETELY: the full object payload (e.g. policy conditions/applyOn, user public_key, transaction amount) plus name, isValid and process (process.currentPhase = governance state: approved vs pending votes). Use the index fields map from wallet_snapshot to discover which fields a class carries. Byte-budgeted: if the object is too large, the largest fields are dropped and NAMED in omittedFields:[{key,bytes}] — never a silent cut. Use this for depth on a single object; use wallet_snapshot_query to enumerate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        snapshotId: { type: 'string', description: 'snapshotId from wallet_snapshot' },
+        id: { type: 'string', description: 'Exact object id (from wallet_snapshot_query rows)' },
+        safe: { type: 'string', description: 'Optional safe address (omnistar1...) to narrow the lookup' },
+      },
+      required: ['snapshotId', 'id'],
+    },
+  },
+  {
     name: 'wallet_profile',
     description: 'Get on-chain profile (pubkey, policies, linked safes). Uses config address when omitted.',
     inputSchema: {
@@ -754,6 +768,13 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         String(input.class),
         Number(input.offset),
         Number(input.limit),
+      );
+    }
+    case 'wallet_snapshot_object': {
+      return cache.object(
+        String(input.snapshotId),
+        String(input.id),
+        input.safe ? { safe: String(input.safe) } : {},
       );
     }
 

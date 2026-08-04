@@ -42,6 +42,70 @@ test('H14: ingest returns the small index, never raw JSON', () => {
   assert.doesNotMatch(serialized, /\b[0-9a-fA-F]{64}\b/);
 });
 
+test('object(): returns the complete object payload + governance siblings', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(FIXTURE);
+  const res = cache.object(snapshotId, 'policy-genesis');
+  assert.equal(res.safe, SAFE);
+  assert.equal(res.class, 'policy');
+  // The full payload — conditions were previously unreachable through any tool.
+  assert.ok(Array.isArray(res.object.conditions) || typeof res.object.conditions === 'object');
+  assert.ok(res.object.SIGNATURE);
+  // Governance state survives end-to-end.
+  const phase = (res.process as { currentPhase?: { name?: string } })?.currentPhase;
+  assert.equal(typeof phase?.name, 'string');
+  assert.equal(res.omittedFields, undefined); // small object: nothing dropped
+});
+
+test('object(): oversized object drops largest fields and NAMES them', () => {
+  const cache = new SnapshotCache({ maxResultBytes: 600 });
+  const raw = JSON.stringify({
+    success: true,
+    data: {
+      address: 'omnistar1prof',
+      snapshot: [{
+        address: 'omnistar1bigsafe', name: 'big.safe',
+        groups: [{
+          id: 'Primary', name: 'Primary', isDeleted: false,
+          nestedObjects: [{
+            class: 'policy', id: 'p-huge', isDeleted: false, isValid: true,
+            process: { currentPhase: { index: '3', name: 'Validated' } },
+            object: {
+              SIGNATURE: 'S'.repeat(64), parentGroup: 'Primary',
+              pending_objects: Array.from({ length: 50 }, (_, i) => `obj-${i}`),
+              conditions: [{ if: 'x', then: 'y' }],
+            },
+          }],
+        }],
+      }],
+    },
+  });
+  const { snapshotId } = cache.ingest(raw);
+  const res = cache.object(snapshotId, 'p-huge');
+  assert.ok(res.omittedFields && res.omittedFields.length > 0, 'dropped fields are named');
+  assert.equal(res.omittedFields![0]!.key, 'pending_objects'); // largest first
+  assert.ok(res.omittedFields![0]!.bytes > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(res)) <= 600, 'stays under budget');
+  // Small fields survive the trim.
+  assert.ok(res.object.conditions);
+  // The cached parse must NOT have been mutated by trimming.
+  const again = cache.object(snapshotId, 'p-huge');
+  assert.deepEqual(again.omittedFields, res.omittedFields);
+});
+
+test('object(): not found -> bounded error with class counts, no id dump', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(FIXTURE);
+  assert.throws(
+    () => cache.object(snapshotId, 'nope-does-not-exist'),
+    (e: Error) =>
+      /not found/.test(e.message) &&
+      /policy:\d+/.test(e.message) &&
+      /wallet_snapshot_query/.test(e.message) &&
+      !/policy-genesis/.test(e.message), // no id enumeration
+  );
+});
+
 test('index.fields maps class -> object field names (discoverability)', () => {
   const cache = new SnapshotCache();
   const index = cache.ingest(FIXTURE);

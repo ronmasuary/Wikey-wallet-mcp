@@ -70,6 +70,27 @@ export interface PageResult {
   truncated: boolean;
 }
 
+/** A field dropped to fit the byte budget — a dropped field is ALWAYS named. */
+export interface OmittedField {
+  key: string;
+  bytes: number;
+}
+
+/** Complete single-object read: full object payload + parser-preserved siblings. */
+export interface ObjectResult {
+  safe: string;
+  group: string;
+  groupName: string;
+  class: string;
+  id: string;
+  isDeleted: boolean;
+  name?: string;
+  isValid?: boolean;
+  process?: Record<string, unknown>;
+  object: Record<string, unknown>;
+  omittedFields?: OmittedField[];
+}
+
 interface CacheEntry {
   parsed: ParsedSnapshot;
   address: string;
@@ -210,6 +231,86 @@ export class SnapshotCache {
       truncated,
       ...(truncated ? { nextOffset: returned } : {}),
     };
+  }
+
+  /**
+   * Complete single-object read: the FULL object payload plus the siblings the
+   * parser preserves (name, isValid, process — i.e. governance state). Point
+   * lookup by id, first match wins (Phase 1a invariant: id is unique per
+   * group-membership); optional safe narrows the search. Byte-bounded: if the
+   * serialized result exceeds maxResultBytes, the largest values are dropped
+   * first and each is NAMED in omittedFields — never a silent cut (H14).
+   */
+  object(id: string, objectId: string, opts: { safe?: string } = {}, now = Date.now()): ObjectResult {
+    const entry = this.get(id, now);
+    for (const safe of entry.parsed.safes) {
+      if (opts.safe && safe.address !== opts.safe) continue;
+      for (const group of safe.groups) {
+        for (const node of group.nestedObjects) {
+          if (node.id !== objectId) continue;
+          const result: ObjectResult = {
+            safe: safe.address,
+            group: group.id,
+            groupName: group.name,
+            class: node.class,
+            id: node.id,
+            isDeleted: node.isDeleted,
+            // copies — trimming must never mutate the cached parse
+            object: { ...node.object },
+          };
+          if (node.name !== undefined) result.name = node.name;
+          if (node.isValid !== undefined) result.isValid = node.isValid;
+          if (node.process !== undefined) result.process = { ...node.process };
+          return this.trimToBudget(result);
+        }
+      }
+    }
+    // Bounded not-found error: class counts, never an id dump (real snapshots
+    // hold 1000+ objects).
+    const counts: Record<string, number> = {};
+    for (const safe of entry.parsed.safes) {
+      if (opts.safe && safe.address !== opts.safe) continue;
+      for (const group of safe.groups) {
+        for (const node of group.nestedObjects) counts[node.class] = (counts[node.class] ?? 0) + 1;
+      }
+    }
+    const summary = Object.entries(counts)
+      .map(([cls, n]) => `${cls}:${n}`)
+      .join(', ');
+    throw new Error(
+      `object ${objectId} not found in snapshot ${id}${opts.safe ? ` (safe ${opts.safe})` : ''}. ` +
+        `Objects present: {${summary}}. Use wallet_snapshot_query to enumerate ids.`,
+    );
+  }
+
+  /**
+   * Fit a single-object result under the byte budget by dropping the largest
+   * values first (object payload entries, then the process sibling). Every
+   * dropped field is named in omittedFields with its serialized size.
+   */
+  private trimToBudget<T extends { object: Record<string, unknown>; process?: Record<string, unknown>; omittedFields?: OmittedField[] }>(
+    result: T,
+  ): T {
+    const size = () => Buffer.byteLength(JSON.stringify(result));
+    if (size() <= this.maxResultBytes) return result;
+
+    const bytesOf = (v: unknown) => Buffer.byteLength(JSON.stringify(v) ?? 'null');
+    const candidates: { key: string; bytes: number; drop: () => void }[] = Object.entries(result.object).map(
+      ([key, v]) => ({ key, bytes: bytesOf(v), drop: () => delete result.object[key] }),
+    );
+    if (result.process !== undefined) {
+      candidates.push({ key: 'process', bytes: bytesOf(result.process), drop: () => delete result.process });
+    }
+    // Deterministic: largest first, then key order.
+    candidates.sort((a, b) => b.bytes - a.bytes || (a.key < b.key ? -1 : 1));
+
+    const omitted: OmittedField[] = (result.omittedFields ??= []);
+    for (const c of candidates) {
+      if (size() <= this.maxResultBytes) break;
+      c.drop();
+      omitted.push({ key: c.key, bytes: c.bytes });
+    }
+    return result;
   }
 
   /** Explicit pagination for a (safe, class) over offset/limit. */
