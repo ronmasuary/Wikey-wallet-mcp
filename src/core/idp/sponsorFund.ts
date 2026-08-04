@@ -18,6 +18,13 @@ export interface ParsedInvite {
   /** The full wallet handle from the link, username@organization (e.g. kehat@wikey). */
   username: string;
   organization: string;
+  /**
+   * Whether this invite should bind a gateway passkey after the safe is created.
+   * The idp appends `&enroll=false` for the fund-and-create-only variant; every
+   * other link (and every link issued before that variant existed) omits it, so
+   * the default is `true` and existing onboarding is unchanged.
+   */
+  enroll: boolean;
 }
 
 /** Parse the self-contained invite link. Throws if it isn't a signup link with a code. */
@@ -37,7 +44,10 @@ export function parseInvite(link: string): ParsedInvite {
   }
   const at = username.indexOf('@');
   const organization = at > 0 ? username.slice(at + 1) : '';
-  return { host, application, invitationCode, username, organization };
+  // Only the explicit string "false" disables enrollment; anything else (absent,
+  // "true", garbage) keeps the default enrol-after-create behavior.
+  const enroll = u.searchParams.get('enroll') !== 'false';
+  return { host, application, invitationCode, username, organization, enroll };
 }
 
 export interface SponsorFundResult {
