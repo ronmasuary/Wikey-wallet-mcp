@@ -159,7 +159,7 @@ const tools = [
   {
     name: 'wallet_snapshot',
     description:
-      "Take a snapshot of the profile's safes and return a SMALL INDEX only: { snapshotId, address, bytes, ts, safes:[{address,name,counts}] }. The raw snapshot JSON is NEVER returned (it can exceed a host's tool-result limit and be silently truncated). Use the returned snapshotId with wallet_snapshot_query (filter by safe/class/id/isDeleted/parentGroup) or wallet_snapshot_page to retrieve specific rows. Resolves SIGNATURE + parentGroup for delete-user / delete-policy. When address is omitted, uses the configured profile.",
+      "Take a snapshot of the profile's safes and return a SMALL INDEX only: { snapshotId, address, bytes, ts, safes:[{address,name,counts}], fields:{class:[key...]} }. The fields map lists which object payload keys each class carries (e.g. policy: conditions, applyOn) — use it to know what you can request, without guessing. The raw snapshot JSON is NEVER returned (it can exceed a host's tool-result limit and be silently truncated). Use the returned snapshotId with wallet_snapshot_query (enumerate/filter rows), wallet_snapshot_object (ONE object in full — governance state, conditions), or wallet_snapshot_page. Resolves SIGNATURE + parentGroup for delete-user / delete-policy. When address is omitted, uses the configured profile.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -174,7 +174,7 @@ const tools = [
   {
     name: 'wallet_snapshot_query',
     description:
-      'Query rows from a cached snapshot (by snapshotId from wallet_snapshot). Returns matched rows with full context (id, class, isDeleted, parentGroup, SIGNATURE, group). Byte-budgeted: a broad match returns the rows that fit PLUS {truncated:true,total,returned,nextOffset} so you page explicitly — never a silent cut. A point lookup ({id}) is always complete and is the path for delete-user/delete-policy resolution.',
+      "Query rows from a cached snapshot (by snapshotId from wallet_snapshot). By DEFAULT each row is a summary projection (safe, group, groupName, class, id, isDeleted, parentGroup, SIGNATURE) — NOT the full object. Request payload keys with fields:[...] or fields:'*' (returned nested under object:, dropped keys named in omittedFields), or use wallet_snapshot_object for one object in full. Byte-budgeted: a broad match returns the rows that fit PLUS {truncated:true,total,returned,nextOffset} so you page explicitly — never a silent cut. A point lookup ({id}) returns all matching rows (complete in row count) and is the path for delete-user/delete-policy resolution. Rule of thumb: _query to enumerate, _object for depth.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -204,7 +204,7 @@ const tools = [
   {
     name: 'wallet_snapshot_page',
     description:
-      'Explicit pagination over a (safe, class) in a cached snapshot. Returns { rows, offset, limit, total, truncated }. Use after wallet_snapshot_query reports truncated:true for a large class.',
+      "Explicit pagination over a (safe, class) in a cached snapshot. Returns { rows, offset, limit, returned, total, truncated }. Supports fields:[...]|'*' like wallet_snapshot_query; byte-budgeted, so with wide rows `returned` may be fewer than limit — continue from offset+returned. Use after wallet_snapshot_query reports truncated:true for a large class.",
     inputSchema: {
       type: 'object',
       properties: {

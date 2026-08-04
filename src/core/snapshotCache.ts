@@ -2,11 +2,15 @@
 //
 // HARD INVARIANT: raw safe/profile snapshot JSON NEVER crosses the tool
 // boundary. `wallet-cli query snapshot` runs inside the server; we parse + cache
-// it here and only ever return small, byte-budgeted, complete-or-explicitly-
-// paged derived answers. A host that silently truncates a large tool result can
-// therefore never feed the model a corrupted snapshot.
+// it here and only ever return byte-budgeted, derived answers. The boundary is
+// SIZE-bounded, not shape-bounded: every field stays reachable (via `fields` /
+// object()), and any cut — dropped rows or dropped fields — is explicitly
+// reported ({truncated,total,returned,nextOffset} / omittedFields), never
+// silent. A host that silently truncates a large tool result can therefore
+// never feed the model a corrupted snapshot.
 //
-// Storage is in-memory (the MCP server is long-lived): last-N snapshots + a TTL.
+// Storage is in-memory (the MCP server is long-lived): last-N snapshots + a TTL
+// + a total-bytes heap cap.
 
 import {
   parseSnapshot,

@@ -204,15 +204,18 @@ stateDiagram-v2
 
 ## 6. Snapshot data-flow (H14)
 
-Raw JSON stays server-side; only bounded derived answers reach the model.
+Raw JSON stays server-side; only bounded derived answers reach the model. The
+boundary is **size-bounded, not shape-bounded**: every field stays reachable
+(`fields` selection on `_query`/`_page`, one complete object via `_object`),
+and every cut — rows or fields — is explicitly reported, never silent.
 
 ```mermaid
 graph LR
-    A["Client model"] -->|wallet_snapshot / _query / _page| M["MCP core"]
+    A["Client model"] -->|wallet_snapshot / _query / _page / _object| M["MCP core"]
     M -->|query snapshot| W["wallet-cli"]
-    W -->|RAW JSON (can be 100s of KB)| M
-    M -->|parseSnapshot + cache| CACHE["snapshotCache (in-memory, last-3, TTL)"]
-    M -->|"index ~300B / matched rows / page<br/>byte-budgeted + {truncated,total,nextOffset}"| A
+    W -->|RAW JSON (can be MBs)| M
+    M -->|parseSnapshot + cache| CACHE["snapshotCache (in-memory, last-3, TTL, total-bytes cap)"]
+    M -->|"index + fields map / rows / page / object<br/>byte-budgeted + {truncated,total,nextOffset} / omittedFields"| A
     M -. "RAW snapshot JSON NEVER returned" .-x A
     classDef secret fill:#fff2c0,stroke:#b8860b;
     class CACHE secret;

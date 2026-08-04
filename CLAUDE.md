@@ -27,7 +27,11 @@ client's own agent. Zero key custody by Wikey. See `docs/ARCHITECTURE.md` and
 - The HMAC key never crosses the tool boundary, a log, `session_status`, or
   child argv. Only egress: `ssp-util` stdin and `SSP_HMAC_KEY` child env.
 - Raw snapshot JSON never returned to the model — only byte-budgeted derived
-  rows (`maxResultBytes`, default 4 KB).
+  answers (`maxResultBytes`, default 4 KB; operator knob
+  `WIKEY_SNAPSHOT_MAX_RESULT_BYTES`). The budget bounds *bytes*, not a fixed
+  field set: every field stays reachable (`fields` param /
+  `wallet_snapshot_object`) and every cut is explicit (`truncated` /
+  `omittedFields`), never silent.
 - Kill only our own SSP child — never `pkill`.
 - Security-critical config keys are locked by default (`signer.*`, `*.url`,
   `apiKey`, `kek*`, `keystore*`, `user.*`). Operator escape hatch:

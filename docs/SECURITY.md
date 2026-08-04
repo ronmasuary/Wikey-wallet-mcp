@@ -104,12 +104,22 @@ running with a live key.
 ### Data-integrity boundary (H14)
 
 Raw safe/profile snapshot JSON is parsed and cached **server-side** and is
-**never** returned to the model. `wallet_snapshot` returns a ~300 B index;
-`wallet_snapshot_query` / `wallet_snapshot_page` return byte-budgeted results
-under `maxResultBytes` (default 4 KB, below the smallest known host tool-result
-limit) with explicit `{truncated, total, returned, nextOffset}`. A host that
-silently truncates a large tool result can therefore never feed the model a
-corrupted snapshot (wrong SIGNATURE / parentGroup / isDeleted).
+**never** returned to the model. The boundary is **size-bounded, not
+shape-bounded**: every field of every object stays *reachable* (summary rows by
+default, payload keys via `fields`, one complete object via
+`wallet_snapshot_object`), but each response is byte-budgeted under
+`maxResultBytes` (default 4 KB, below the smallest known host tool-result
+limit; operators can raise it via `WIKEY_SNAPSHOT_MAX_RESULT_BYTES`). Any cut
+is explicit — dropped rows report `{truncated, total, returned, nextOffset}`,
+dropped fields are named in `omittedFields:[{key,bytes}]` — never silent. A
+host that silently truncates a large tool result can therefore never feed the
+model a corrupted snapshot (wrong SIGNATURE / parentGroup / isDeleted).
+
+> Posture note: earlier versions also bounded the *shape* (a fixed 8-field
+> projection with everything else silently dropped). That was a bug, not a
+> defense — the model could not distinguish "absent" from "removed". Object
+> payload values (policy conditions, user public_key, …) now cross the boundary
+> on request; SIGNATURE values always did.
 
 ## Confused-deputy caveat (H12)
 
