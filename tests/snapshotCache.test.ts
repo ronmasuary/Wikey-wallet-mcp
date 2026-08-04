@@ -37,7 +37,9 @@ test('H14: ingest returns the small index, never raw JSON', () => {
   // The index must NOT carry raw object material (SIGNATUREs / public keys).
   const serialized = JSON.stringify(index);
   assert.doesNotMatch(serialized, /41F0435AD59584393F916033A845BDE374EC928ECB9B44597E932475D35F3686/);
-  assert.doesNotMatch(serialized, /SIGNATURE/);
+  // Check for SIGNATURE *values* (64-hex tokens), not the string "SIGNATURE" —
+  // the index legitimately lists field NAMES (class → keys map) for discoverability.
+  assert.doesNotMatch(serialized, /\b[0-9a-fA-F]{64}\b/);
 });
 
 test('H14: point lookup {id} is always complete', () => {
