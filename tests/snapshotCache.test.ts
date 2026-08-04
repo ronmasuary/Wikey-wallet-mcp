@@ -161,11 +161,88 @@ test('H14: paging retrieves all rows', () => {
   assert.equal(new Set(collected).size, 25);
 });
 
+test('fields: requested object payload keys come back nested under object:', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(FIXTURE);
+  const res = cache.query(snapshotId, { id: 'policy-genesis' }, ['conditions', 'applyOn']);
+  assert.equal(res.rows.length, 1);
+  const row = res.rows[0]!;
+  assert.ok(row.object, 'object payload present when fields requested');
+  assert.ok('conditions' in row.object!);
+  // Row's own summary keys are untouched (collision-safe nesting).
+  assert.equal(row.class, 'policy');
+  assert.ok(row.SIGNATURE);
+});
+
+test('fields omitted: rows are byte-identical to the historical 8-field shape', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(FIXTURE);
+  const res = cache.query(snapshotId, { id: LIVE_USER });
+  assert.deepEqual(Object.keys(res.rows[0]!), [
+    'safe', 'group', 'groupName', 'class', 'id', 'isDeleted', 'parentGroup', 'SIGNATURE',
+  ]);
+});
+
+test("fields '*': broad match truncates by rows with correct nextOffset", () => {
+  const cache = new SnapshotCache({ maxResultBytes: 2048 });
+  const { snapshotId } = cache.ingest(bigSnapshot(100));
+  const res = cache.query(snapshotId, { class: 'user' }, '*');
+  assert.equal(res.total, 100);
+  assert.ok(res.truncated);
+  assert.ok(res.returned < 100);
+  assert.equal(res.nextOffset, res.returned);
+  assert.ok(res.rows[0]!.object!.public_key, 'payload keys present');
+  assert.ok(Buffer.byteLength(JSON.stringify(res.rows)) <= 2048);
+});
+
+test("page with fields '*' respects the byte budget (returned < limit)", () => {
+  const cache = new SnapshotCache({ maxResultBytes: 2048 });
+  const { snapshotId } = cache.ingest(bigSnapshot(100));
+  const page = cache.page(snapshotId, 'omnistar1bigsafe', 'user', 0, 100, '*');
+  assert.ok(page.returned < 100, 'byte budget cut the slice');
+  assert.equal(page.rows.length, page.returned);
+  assert.ok(page.truncated);
+  assert.ok(Buffer.byteLength(JSON.stringify(page.rows)) <= 2048);
+  // Paging by `returned` still reaches every row.
+  const next = cache.page(snapshotId, 'omnistar1bigsafe', 'user', page.returned, 100, '*');
+  assert.equal(next.rows[0]!.id, `user-${page.returned}`);
+});
+
+test('fields + point lookup: an oversized row is trimmed with named omissions, never a blob', () => {
+  const cache = new SnapshotCache({ maxResultBytes: 400 });
+  const raw = JSON.stringify({
+    success: true,
+    data: {
+      address: 'omnistar1prof',
+      snapshot: [{
+        address: 'omnistar1bigsafe', name: 'big.safe',
+        groups: [{
+          id: 'Primary', name: 'Primary', isDeleted: false,
+          nestedObjects: [{
+            class: 'policy', id: 'p-wide', isDeleted: false,
+            object: {
+              SIGNATURE: 'S'.repeat(64), parentGroup: 'Primary',
+              affected_by: Array.from({ length: 80 }, (_, i) => `dep-${i}`),
+              name: 'small',
+            },
+          }],
+        }],
+      }],
+    },
+  });
+  const { snapshotId } = cache.ingest(raw);
+  const res = cache.query(snapshotId, { id: 'p-wide' }, '*');
+  const row = res.rows[0]!;
+  assert.ok(row.omittedFields?.some((f) => f.key === 'affected_by'), 'dropped field is named');
+  assert.equal(row.object!.name, 'small'); // small fields survive
+  assert.ok(Buffer.byteLength(JSON.stringify(res.rows)) <= 400);
+});
+
 test('H14: TTL expiry errors clearly', () => {
   const cache = new SnapshotCache({ ttlMs: 1000 });
   const { snapshotId } = cache.ingest(bigSnapshot(2), 0);
-  assert.doesNotThrow(() => cache.query(snapshotId, {}, 500));
-  assert.throws(() => cache.query(snapshotId, {}, 2000), /expired/);
+  assert.doesNotThrow(() => cache.query(snapshotId, {}, undefined, 500));
+  assert.throws(() => cache.query(snapshotId, {}, undefined, 2000), /expired/);
 });
 
 test('H14: last-3 eviction', () => {

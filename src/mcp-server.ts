@@ -50,6 +50,7 @@ import {
   buildGettingStarted,
   onboardSponsor,
   redact,
+  type FieldSelector,
   type PolicyCondition,
   type QueryFilter,
   type WalletCliLauncher,
@@ -186,10 +187,15 @@ const tools = [
               type: 'string',
               description: "Object class: user, policy, group, transaction, vote, profile, execution",
             },
-            id: { type: 'string', description: 'Exact object id (point lookup — always complete)' },
+            id: { type: 'string', description: 'Exact object id (point lookup — all matching rows returned)' },
             isDeleted: { type: 'boolean', description: 'Filter by soft-deleted flag' },
             parentGroup: { type: 'string', description: 'Parent group id (e.g. Primary)' },
           },
+        },
+        fields: {
+          description:
+            "Optional object payload keys to include per row (nested under object:), or '*' for all. See the fields map in the wallet_snapshot index for what each class carries. Wide rows shrink the row count per response.",
+          oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string', enum: ['*'] }],
         },
       },
       required: ['snapshotId'],
@@ -207,6 +213,11 @@ const tools = [
         class: { type: 'string', description: 'Object class to page through' },
         offset: { type: 'number', description: 'Row offset (0-based)' },
         limit: { type: 'number', description: 'Max rows to return' },
+        fields: {
+          description:
+            "Optional object payload keys to include per row (nested under object:), or '*' for all. Byte-budgeted: returned may be fewer rows than limit.",
+          oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string', enum: ['*'] }],
+        },
       },
       required: ['snapshotId', 'safe', 'class', 'offset', 'limit'],
     },
@@ -716,6 +727,13 @@ interface Deps {
   walletCli: WalletCliLauncher;
 }
 
+// Loose coercion of the optional `fields` tool arg ('*' | string[]).
+function parseFields(v: unknown): FieldSelector | undefined {
+  if (v === '*') return '*';
+  if (Array.isArray(v)) return v.map(String);
+  return undefined;
+}
+
 async function dispatch(deps: Deps, name: string, input: Record<string, unknown>): Promise<unknown> {
   const { session, cache, walletCli } = deps;
   // Every wallet-cli read runs with HOME pinned to the state root so it reads the
@@ -759,7 +777,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     case 'wallet_snapshot_query': {
       const snapshotId = String(input.snapshotId);
       const filter = (input.filter ?? {}) as QueryFilter;
-      return cache.query(snapshotId, filter);
+      return cache.query(snapshotId, filter, parseFields(input.fields));
     }
     case 'wallet_snapshot_page': {
       return cache.page(
@@ -768,6 +786,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         String(input.class),
         Number(input.offset),
         Number(input.limit),
+        parseFields(input.fields),
       );
     }
     case 'wallet_snapshot_object': {

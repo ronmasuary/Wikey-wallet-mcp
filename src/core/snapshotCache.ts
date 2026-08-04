@@ -8,7 +8,13 @@
 //
 // Storage is in-memory (the MCP server is long-lived): last-N snapshots + a TTL.
 
-import { parseSnapshot, rowsOfClass, type ParsedSnapshot } from './snapshot.js';
+import {
+  parseSnapshot,
+  rowsOfClass,
+  type NestedObject,
+  type ParsedSnapshot,
+  type SnapshotGroup,
+} from './snapshot.js';
 
 export interface SafeIndexEntry {
   address: string;
@@ -35,6 +41,13 @@ export interface SnapshotIndex {
   fields: Record<string, string[]>;
 }
 
+/**
+ * Field selection for query/page rows: explicit object payload keys, or '*'
+ * for all of them (budget permitting). Omitted → the default 8-field summary
+ * row, byte-identical to the historical shape.
+ */
+export type FieldSelector = string[] | '*';
+
 export interface SnapshotRow {
   safe: string;
   group: string;
@@ -44,6 +57,11 @@ export interface SnapshotRow {
   isDeleted: boolean;
   parentGroup: string;
   SIGNATURE: string;
+  /** Selected object payload keys (only when `fields` was requested). Nested
+   * so a payload field named `id`/`class` can never collide with the row's own. */
+  object?: Record<string, unknown>;
+  /** Fields dropped from `object` to fit the byte budget — always named. */
+  omittedFields?: OmittedField[];
 }
 
 export interface QueryFilter {
@@ -66,6 +84,8 @@ export interface PageResult {
   rows: SnapshotRow[];
   offset: number;
   limit: number;
+  /** Rows actually returned — may be fewer than the slice when wide rows hit the byte budget. */
+  returned: number;
   total: number;
   truncated: boolean;
 }
@@ -180,7 +200,44 @@ export class SnapshotCache {
     return e;
   }
 
-  private allRows(entry: CacheEntry, filter: QueryFilter = {}): SnapshotRow[] {
+  /**
+   * Single projection site for query() and page(). Without `fields`: the exact
+   * historical 8-field summary row (byte-identical). With `fields`: the picked
+   * object payload keys nested under `object:`; each row is individually
+   * trimmed to the byte budget so no single row can exceed it (dropped keys
+   * are named in the row's omittedFields).
+   */
+  private projectRow(
+    safeAddress: string,
+    group: SnapshotGroup,
+    node: NestedObject,
+    fields?: FieldSelector,
+  ): SnapshotRow {
+    const row: SnapshotRow = {
+      safe: safeAddress,
+      group: group.id,
+      groupName: group.name,
+      class: node.class,
+      id: node.id,
+      isDeleted: node.isDeleted,
+      parentGroup: node.object.parentGroup,
+      SIGNATURE: node.object.SIGNATURE,
+    };
+    if (fields !== undefined) {
+      const keys = fields === '*' ? Object.keys(node.object) : fields;
+      const object: Record<string, unknown> = {};
+      for (const k of keys) {
+        if (k in node.object) object[k] = node.object[k]; // copy — never expose the cached parse to mutation
+      }
+      row.object = object;
+      // Headroom (16 B) for the surrounding array/result envelope so a lone
+      // max-size row still leaves the whole response under budget.
+      this.trimToBudget(row as SnapshotRow & { object: Record<string, unknown> }, this.maxResultBytes - 16);
+    }
+    return row;
+  }
+
+  private allRows(entry: CacheEntry, filter: QueryFilter = {}, fields?: FieldSelector): SnapshotRow[] {
     const rows: SnapshotRow[] = [];
     for (const safe of entry.parsed.safes) {
       if (filter.safe && safe.address !== filter.safe) continue;
@@ -190,16 +247,7 @@ export class SnapshotCache {
           if (filter.id && node.id !== filter.id) continue;
           if (filter.isDeleted !== undefined && node.isDeleted !== filter.isDeleted) continue;
           if (filter.parentGroup && node.object.parentGroup !== filter.parentGroup) continue;
-          rows.push({
-            safe: safe.address,
-            group: group.id,
-            groupName: group.name,
-            class: node.class,
-            id: node.id,
-            isDeleted: node.isDeleted,
-            parentGroup: node.object.parentGroup,
-            SIGNATURE: node.object.SIGNATURE,
-          });
+          rows.push(this.projectRow(safe.address, group, node, fields));
         }
       }
     }
@@ -207,17 +255,21 @@ export class SnapshotCache {
   }
 
   /**
-   * Filtered query, byte-budgeted. A point lookup ({id}) is always returned
-   * complete (it is small — the delete-user/delete-policy path). A broad match
-   * returns as many rows as fit under maxResultBytes plus explicit
-   * {truncated,total,returned,nextOffset} — never a silent cut.
+   * Filtered query, byte-budgeted. A point lookup ({id}) is complete in ROW
+   * COUNT (it is small — the delete-user/delete-policy path); when `fields`
+   * widens the rows, per-row trimming may still drop payload keys, each named
+   * in the row's omittedFields. A broad match returns as many rows as fit
+   * under maxResultBytes plus explicit {truncated,total,returned,nextOffset}
+   * — never a silent cut.
    */
-  query(id: string, filter: QueryFilter = {}, now = Date.now()): QueryResult {
+  query(id: string, filter: QueryFilter = {}, fields?: FieldSelector, now = Date.now()): QueryResult {
     const entry = this.get(id, now);
-    const all = this.allRows(entry, filter);
+    const all = this.allRows(entry, filter, fields);
     const total = all.length;
 
-    // Point lookup: always complete.
+    // Point lookup: all matching rows are returned. Without `fields` the rows
+    // are tiny summary rows; with `fields` each row is already trimmed to the
+    // budget (omittedFields), so this can never return an unbounded blob.
     if (filter.id) {
       return { rows: all, total, returned: all.length, truncated: false };
     }
@@ -290,9 +342,10 @@ export class SnapshotCache {
    */
   private trimToBudget<T extends { object: Record<string, unknown>; process?: Record<string, unknown>; omittedFields?: OmittedField[] }>(
     result: T,
+    maxBytes = this.maxResultBytes,
   ): T {
     const size = () => Buffer.byteLength(JSON.stringify(result));
-    if (size() <= this.maxResultBytes) return result;
+    if (size() <= maxBytes) return result;
 
     const bytesOf = (v: unknown) => Buffer.byteLength(JSON.stringify(v) ?? 'null');
     const candidates: { key: string; bytes: number; drop: () => void }[] = Object.entries(result.object).map(
@@ -306,20 +359,26 @@ export class SnapshotCache {
 
     const omitted: OmittedField[] = (result.omittedFields ??= []);
     for (const c of candidates) {
-      if (size() <= this.maxResultBytes) break;
+      if (size() <= maxBytes) break;
       c.drop();
       omitted.push({ key: c.key, bytes: c.bytes });
     }
     return result;
   }
 
-  /** Explicit pagination for a (safe, class) over offset/limit. */
+  /**
+   * Explicit pagination for a (safe, class) over offset/limit. The slice is
+   * additionally byte-budgeted (wide `fields` rows can exceed what a row count
+   * alone would bound): `returned` may be < the slice, and truncated reflects
+   * both cuts — never a silent one.
+   */
   page(
     id: string,
     safe: string,
     cls: string,
     offset: number,
     limit: number,
+    fields?: FieldSelector,
     now = Date.now(),
   ): PageResult {
     const entry = this.get(id, now);
@@ -329,19 +388,20 @@ export class SnapshotCache {
         `safe ${safe} not in snapshot ${id}. Available: ${entry.parsed.safes.map((s) => s.address).join(', ')}`,
       );
     }
-    const all = rowsOfClass(matchSafe, cls).map(({ node, group }) => ({
-      safe: matchSafe.address,
-      group: group.id,
-      groupName: group.name,
-      class: node.class,
-      id: node.id,
-      isDeleted: node.isDeleted,
-      parentGroup: node.object.parentGroup,
-      SIGNATURE: node.object.SIGNATURE,
-    }));
+    const all = rowsOfClass(matchSafe, cls).map(({ node, group }) =>
+      this.projectRow(matchSafe.address, group, node, fields),
+    );
     const total = all.length;
     const slice = all.slice(offset, offset + limit);
-    return { rows: slice, offset, limit, total, truncated: offset + slice.length < total };
+    const { rows, returned } = this.budget(slice);
+    return {
+      rows,
+      offset,
+      limit,
+      returned,
+      total,
+      truncated: offset + returned < total,
+    };
   }
 
   /** Greedily take rows while the serialized array stays under the budget. */
@@ -349,7 +409,8 @@ export class SnapshotCache {
     const rows: SnapshotRow[] = [];
     let size = 2; // for "[]"
     for (const row of all) {
-      const rowSize = JSON.stringify(row).length + 1; // +1 for the comma
+      // bytes, not chars — payload values selected via `fields` may be non-ASCII
+      const rowSize = Buffer.byteLength(JSON.stringify(row)) + 1; // +1 for the comma
       if (rows.length > 0 && size + rowSize > this.maxResultBytes) break;
       rows.push(row);
       size += rowSize;
