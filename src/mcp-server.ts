@@ -49,6 +49,8 @@ import {
   assertConfigSetAllowed,
   buildGettingStarted,
   onboardSponsor,
+  buildRecoveryDeeplink,
+  parseRecoveryDeeplink,
   redact,
   type FieldSelector,
   type PolicyCondition,
@@ -64,6 +66,7 @@ import {
   gatewayMcpCall,
   loadCfg,
   resolveWalletIdentity,
+  waitForWalletIdentity,
   type RegisterInput,
   type LoginInput,
   type LoginSigner,
@@ -352,7 +355,7 @@ const tools = [
   {
     name: 'wallet_onboard_sponsor',
     description:
-      'Redeem an invitation link — the COMPLETE sponsored onboarding in one call. Use this whenever a user hands you an invitation/signup link and asks to redeem or use it. It (1) creates a signing key, (2) funds it from the sponsor grant behind the invite code (the invitee never funds anything), (3) creates their account + safe under the invite\'s username@organization handle, and (4) enrolls the wallet passkey to the gateway with the same code. Takes a few minutes: the safe needs ~30s to validate on-chain before enrollment can bind to it. Stage "funded-created-enrolled" = fully done; "created-enroll-failed" = on-chain work done, retry only wallet_gateway_register; "recovery-required" = the invite already onboarded an account. Safe to re-run with the same link: it RESUMES an interrupted onboarding on the already-funded key instead of creating a second identity.',
+      'Redeem an invitation link — the COMPLETE sponsored onboarding in one call. Use this whenever a user hands you an invitation/signup link and asks to redeem or use it. It (1) creates a signing key, (2) funds it from the sponsor grant behind the invite code (the invitee never funds anything), (3) creates their account + safe under the invite\'s username@organization handle, and (4) enrolls the wallet passkey to the gateway with the same code. Takes a few minutes for EITHER variant: the safe needs time to become queryable on-chain, and this tool waits for that before returning so its answer agrees with wallet_getting_started. Some invitations carry enroll=false — the fund-and-create-only variant: steps 1-3 run and step 4 is intentionally skipped (a passkey can be bound later with wallet_gateway_register). Stage "funded-created-enrolled" = fully done; "funded-created" = no-enroll invite, account ready on-chain, enrollment skipped by design; if either success stage comes back with a warning that the safe is not queryable yet, onboarding still SUCCEEDED — never call wallet_tx_create_safe to "fix" it (that would create a second safe on the funded key), just re-check in a few minutes; "created-enroll-failed" = on-chain work done, retry only wallet_gateway_register; "recovery-required" = the invite already onboarded an account. Safe to re-run with the same link: it RESUMES an interrupted onboarding on the already-funded key instead of creating a second identity.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -416,7 +419,7 @@ const tools = [
   {
     name: 'wallet_tx_request_recovery',
     description:
-      'Request account recovery for an existing username. Signs with the new key and references the original account by username (wallet-cli requires --username). Pass `username` directly, or pass `oldAddress` and the server resolves the username via query profile. Exactly one of the two is required.',
+      'Request account recovery for an existing username (for a user who lost their key). Signs with the NEW key and references the original account by username (wallet-cli requires --username). Pass `username` directly, or pass `oldAddress` and the server resolves the username via query profile. Exactly one of the two is required. Returns { tx, recoveryDeeplink, shareWithHelpers }: forward `recoveryDeeplink` (https://open.wikey.io/accountRecover?t=recover&pk=<newAddress>&tn=<accountName>) to a recovery helper — they open it in the Wikey wallet app, or hand it to their own agent which passes it to wallet_tx_approve_recovery.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -432,15 +435,21 @@ const tools = [
   },
   {
     name: 'wallet_tx_approve_recovery',
-    description: 'Approve a recovery request as a helper.',
+    description:
+      "Approve a recovery request as a helper. If a friend sent you a recovery deeplink (https://open.wikey.io/accountRecover?t=recover&pk=<newAddress>&tn=<accountName>), just pass it as `deeplink` — it maps to oldaccount=tn (the account being recovered) and newaccount=pk (their new address). Otherwise pass `oldaccount` and `newaccount` explicitly. Explicit values win over the deeplink.",
     inputSchema: {
       type: 'object',
       properties: {
-        oldaccount: { type: 'string', description: 'Original account username being recovered' },
-        newaccount: { type: 'string', description: 'New omnistar1... address replacing the old one' },
+        deeplink: {
+          type: 'string',
+          description:
+            'Recovery deeplink the requester forwarded (https://open.wikey.io/accountRecover?t=recover&pk=<newAddress>&tn=<accountName>). Supplies oldaccount/newaccount when they are not passed explicitly.',
+        },
+        oldaccount: { type: 'string', description: 'Original account username being recovered (tn). Optional if `deeplink` is given.' },
+        newaccount: { type: 'string', description: 'New omnistar1... address replacing the old one (pk). Optional if `deeplink` is given.' },
         signingKey: SIGNING_KEY_PROP,
       },
-      required: ['oldaccount', 'newaccount'],
+      required: [],
     },
   },
   {
@@ -860,6 +869,24 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
           return session.signPrompted(args, []);
         },
         listKeys: listKeystoreAddresses,
+        // Pre-flight "is this handle already ours?": compare the invite's handle
+        // against the on-chain profile name of every key in the keystore. Uses the
+        // non-signing query runner, so it never wakes the SSP session. A key with
+        // no profile (fresh, unfunded, or never create-safe'd) throws here — that
+        // is a non-match, not an error, so each lookup is swallowed individually
+        // rather than failing the whole scan.
+        findLocalAccount: async (username) => {
+          for (const addr of listKeystoreAddresses()) {
+            try {
+              if (extractUsernameFromProfile(await query(['query', 'profile', '--address', addr])) === username) {
+                return addr;
+              }
+            } catch {
+              /* no profile on this key — not a match */
+            }
+          }
+          return undefined;
+        },
         // Chain-truth check for a resumed run: does this key already have a
         // profile+safe? Reads the snapshot node directly by address (no default-key
         // dependency, no SSP session). Any failure means "not yet" — the caller
@@ -870,6 +897,24 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
             return true;
           } catch {
             return false;
+          }
+        },
+        // Same poll enrollment uses (waitForSafe), exposed for the no-enroll
+        // variant, which has no enrollment step to absorb the wait. On a resumed
+        // run safeExists already proved the safe is queryable, so answer from a
+        // single immediate attempt instead of paying the initial delay. A timeout
+        // (or any failure) is reported as "not visible yet", never as an error:
+        // the caller degrades it to a warning on an otherwise-complete onboarding.
+        awaitSafe: async (address, { safeIsNew }) => {
+          try {
+            const id = await waitForWalletIdentity(
+              loadCfg(),
+              address,
+              safeIsNew ? {} : { initialDelayMs: 0, attempts: 1 },
+            );
+            return id.safe;
+          } catch {
+            return undefined;
           }
         },
         // Wait for on-chain validation only when create-safe just broadcast; a
@@ -928,12 +973,72 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         resolved = extractUsernameFromProfile(profileRaw);
       }
       const signer = await resolveSignerArgs(query, input.signingKey);
-      return session.signPrompted(['tx', 'request-recovery', '--username', resolved, '--broadcast', ...signer], []);
+      const args = ['tx', 'request-recovery', '--username', resolved, '--broadcast', ...signer];
+      // Sponsor/org accounts carry a username@organization handle; recovery must
+      // opt into the same @-tolerant validation create-safe uses, or wallet-cli
+      // rejects the '@' before signing.
+      if (resolved.includes('@')) args.push('--allow-org-username');
+      const tx = await session.signPrompted(args, []);
+
+      // Hand the requester a deeplink to forward to a recovery helper. pk = the
+      // NEW key the account is being recovered onto (the signer); tn = the
+      // account asking for help (the username being recovered).
+      let newAccount = input.signingKey ? String(input.signingKey) : '';
+      if (!newAccount) {
+        try {
+          newAccount =
+            (JSON.parse(await query(['config', 'get', 'user.address'])) as { data?: { value?: string } })
+              ?.data?.value ?? '';
+        } catch {
+          /* address unresolved — deeplink omitted below */
+        }
+      }
+      const txResult: unknown = (() => {
+        try {
+          return JSON.parse(tx);
+        } catch {
+          return tx;
+        }
+      })();
+      const recoveryDeeplink = newAccount
+        ? buildRecoveryDeeplink({ newAccount, accountName: resolved })
+        : undefined;
+      return JSON.stringify(
+        {
+          tx: txResult,
+          recoveryDeeplink,
+          shareWithHelpers: recoveryDeeplink
+            ? `Send this link to a recovery helper. They can open it in the Wikey wallet app, or hand it to their own AI agent (wikey-wallet MCP) to approve recovering "${resolved}" onto your new key.`
+            : `Recovery requested for "${resolved}", but the new account address could not be resolved to build a helper deeplink.`,
+        },
+        null,
+        2,
+      );
     }
     case 'wallet_tx_approve_recovery': {
+      const { oldaccount, newaccount, deeplink } = input as {
+        oldaccount?: string;
+        newaccount?: string;
+        deeplink?: string;
+      };
+      // A helper can paste the recovery deeplink their friend sent instead of
+      // spelling out oldaccount/newaccount. Explicit params win; the deeplink
+      // fills in whatever is missing (tn → oldaccount, pk → newaccount).
+      let oldAccount = oldaccount ? String(oldaccount) : '';
+      let newAccount = newaccount ? String(newaccount) : '';
+      if (deeplink) {
+        const parts = parseRecoveryDeeplink(String(deeplink));
+        if (!oldAccount) oldAccount = parts.accountName;
+        if (!newAccount) newAccount = parts.newAccount;
+      }
+      if (!oldAccount || !newAccount) {
+        throw new Error(
+          'wallet_tx_approve_recovery requires `deeplink`, or both `oldaccount` and `newaccount`.',
+        );
+      }
       const signer = await resolveSignerArgs(query, input.signingKey);
       return session.signPrompted(
-        ['tx', 'approve-recovery', '--oldaccount', String(input.oldaccount), '--newaccount', String(input.newaccount), '--broadcast', ...signer],
+        ['tx', 'approve-recovery', '--oldaccount', oldAccount, '--newaccount', newAccount, '--broadcast', ...signer],
         [],
       );
     }

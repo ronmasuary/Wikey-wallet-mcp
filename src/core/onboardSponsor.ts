@@ -20,6 +20,20 @@
 // to one address), so here "new identity" == "new key". Index-derived accounts on
 // an existing key would be a separate wallet-cli/signer capability.
 //
+// PRE-FLIGHT: is this handle already ours? Before minting or funding anything we
+// ask whether some key in THIS keystore already owns an account named for the
+// invite's username. If one does, the invite was already redeemed here and the
+// only honest answer is to say so — minting a key and calling the proxy would
+// burn a keypair to be told the same thing by an HTTP 403. This check is local
+// and read-only (no proxy, no signing), which is exactly why it goes first.
+//
+// The carve-out: an INTERRUPTED run also leaves a local account for the handle,
+// and that one must still resume (the grant is reserved, possibly uncommitted,
+// and the passkey may not be bound). So the short-circuit fires only when the
+// breadcrumb agrees the work is finished — no grant for this code, or one that
+// already reached `enrolled`. A grant sitting at `funded`/`created` means work is
+// genuinely outstanding and falls through to the resume path below.
+//
 // RESUME, not restart. Steps 2-5 move real value and real on-chain state, so a
 // run that dies part-way must continue where it stopped. Minting a second key
 // instead would strand the airdropped gas on the first one and — because the
@@ -32,7 +46,7 @@
 // someone — that alone routes to recovery.
 
 import { sponsorFund, sponsorCommit, parseInvite } from './idp/sponsorFund.js';
-import { loadGrant, saveGrant } from './idp/sponsorGrants.js';
+import { loadGrant, saveGrant, type GrantStage } from './idp/sponsorGrants.js';
 import { parseDefaultAddress } from './gettingStarted.js';
 
 export interface OnboardSponsorDeps {
@@ -48,8 +62,27 @@ export interface OnboardSponsorDeps {
   createSafe: (username: string, allowOrg: boolean, address: string) => Promise<string>;
   /** Addresses present in the local keystore — used to tell "our key" from someone else's. */
   listKeys: () => string[];
+  /**
+   * The local key whose on-chain profile is already named `username`, if any.
+   * Read-only and signing-free. Keys with no profile yet (freshly created,
+   * unfunded, or never create-safe'd) are simply not matches, so this must
+   * swallow their lookup failures rather than propagate them.
+   */
+  findLocalAccount: (username: string) => Promise<string | undefined>;
   /** True once `address` has a profile + safe on-chain (create-safe already done). */
   safeExists: (address: string) => Promise<boolean>;
+  /**
+   * Poll until `address`'s safe is queryable on-chain, resolving to the safe's
+   * address. `safeIsNew` carries the same meaning as in `enroll` — false on a
+   * resumed run whose safe was already confirmed, so the poll can skip its
+   * initial delay and answer immediately.
+   *
+   * Resolves `undefined` on timeout rather than throwing: by the time this runs
+   * the funding, the safe and the grant commit have all succeeded, and none of
+   * them is retried, so a slow chain must not turn a completed onboarding into a
+   * failure.
+   */
+  awaitSafe: (address: string, opts: { safeIsNew: boolean }) => Promise<string | undefined>;
   /**
    * Bind the wallet passkey for `address` to the gateway using the invite.
    * `safeIsNew` is true when create-safe just ran, so the safe still needs its
@@ -66,8 +99,22 @@ export interface OnboardSponsorDeps {
 export type OnboardStage =
   /** Everything done: funded, safe created, grant committed, passkey enrolled. */
   | 'funded-created-enrolled'
+  /**
+   * The no-enroll variant's success terminal: funded, safe created, grant
+   * committed, and enrollment INTENTIONALLY skipped (invite carried
+   * `enroll=false`). The account is fully usable on-chain; a passkey can still be
+   * bound later with wallet_gateway_register.
+   */
+  | 'funded-created'
   /** Safe exists and the grant is committed, but the passkey did not bind. */
   | 'created-enroll-failed'
+  /**
+   * This machine already holds the account for the invite's handle — the link was
+   * redeemed here. Nothing was minted, funded or signed. Distinct from
+   * `recovery-required`: the account is ALREADY OURS, so there is nothing to
+   * recover, only something to report.
+   */
+  | 'already-onboarded'
   /** The invite already onboarded an account — this is a recovery, not a new safe. */
   | 'recovery-required';
 
@@ -112,13 +159,47 @@ export async function onboardSponsor(
   const warnings: string[] = [];
   const owned = (addr?: string): boolean => Boolean(addr) && deps.listKeys().includes(addr as string);
 
+  // 0. Already ours? Cheapest possible answer, and it costs no key and no grant.
+  //    Skipped only while a grant for this code is still mid-flight (see the
+  //    pre-flight note above) — that case has real work left and must resume.
+  //
+  //    "Finished" depends on the invite variant: an enrol invite is done at
+  //    `enrolled`, a no-enroll invite (enroll:false) is done at `committed`. We
+  //    read the PRIOR run's recorded intent, not this link's, so a completed
+  //    no-enroll grant short-circuits to already-onboarded rather than being
+  //    mistaken for an interrupted enrol grant and driven into recovery.
+  const priorGrant = loadGrant(parsed.invitationCode);
+  const priorTerminal: GrantStage = priorGrant?.enroll === false ? 'committed' : 'enrolled';
+  const grantInFlight = priorGrant !== null && priorGrant.stage !== priorTerminal;
+  if (!grantInFlight) {
+    const mine = await deps.findLocalAccount(parsed.username);
+    if (mine) {
+      return {
+        stage: 'already-onboarded',
+        address: mine,
+        username: parsed.username,
+        organization: parsed.organization,
+        funded: false,
+        keyCreated: false,
+        resumed: false,
+        enrolled: false,
+        message:
+          `The account "${parsed.username}" already exists on this machine, owned by the key ${mine}. ` +
+          `This invitation link was already redeemed here, so its one-time code is almost certainly spent — ` +
+          `no key was created and no funding was attempted.`,
+        next:
+          `Nothing to do: use the existing account. Check its gateway passkey with wallet_gateway_status, ` +
+          `and if the passkey was never bound, re-run just wallet_gateway_register with this link.`,
+      };
+    }
+  }
+
   // 1. Pick the key to onboard.
   //
   // Prefer resuming the key a previous run already funded for this invite — the
   // breadcrumb is checked BEFORE minting anything, so the common interrupted-run
   // case costs no stray key and no wasted airdrop. Only when there is no local
   // record of this invite do we mint a fresh key.
-  const priorGrant = loadGrant(parsed.invitationCode);
   let address: string;
   let keyCreated = false;
   let resumed = false;
@@ -187,7 +268,7 @@ export async function onboardSponsor(
       ...(warnings.length ? { warnings } : {}),
     };
   }
-  saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'funded' });
+  saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'funded', enroll: parsed.enroll });
 
   // 3. Create the account + safe — unless the chain says it already exists (a
   //    resumed run whose create-safe actually landed before the failure). The
@@ -231,7 +312,7 @@ export async function onboardSponsor(
       );
     }
   }
-  saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'created' });
+  saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'created', enroll: parsed.enroll });
 
   // 4. Finalize (commit) the grant now that the safe exists. sponsorFund only
   //    RESERVED + airdropped; committing here is what actually spends the
@@ -245,7 +326,7 @@ export async function onboardSponsor(
         `but the sponsorships ledger still shows this invite as unspent. Reconcile it.`,
     );
   } else {
-    saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'committed' });
+    saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'committed', enroll: parsed.enroll });
   }
 
   const base = {
@@ -261,6 +342,46 @@ export async function onboardSponsor(
     `${alreadyCreated ? 'Resumed onboarding on the already-funded key' : 'Funded new invitee key'} ${address}` +
     ` and ${alreadyCreated ? 'confirmed' : 'created'} account + safe "${parsed.username}"${switched}.`;
 
+  // 5a. No-enroll variant (invite carried enroll=false): fund + create the safe
+  //     only, then stop. The breadcrumb's terminal stage is `committed` (set
+  //     above) and its enroll:false flag marks that as done, so a re-run
+  //     short-circuits to already-onboarded rather than resuming. Enrollment is
+  //     not lost, only deferred: the Casdoor enrollment ledger (UsedCount/Quota)
+  //     is untouched, so wallet_gateway_register with the same link binds a
+  //     passkey on demand later.
+  if (!parsed.enroll) {
+    // Wait for the safe to become READABLE before reporting success. create-safe
+    // returns once broadcast, but the profile's safes[] is written by a separate,
+    // later addSafe tx — so `query snapshot` keeps returning an empty safes[] for
+    // minutes afterwards. The enrol variant absorbs that wait incidentally inside
+    // enrollment (waitForSafe, step 5); this branch has no such step, so without
+    // an explicit wait it returns "done" while wallet_getting_started still reads
+    // stage `no-safe` and instructs the user to create the safe they already have
+    // — following that would mint a SECOND safe on the funded key. Waiting here is
+    // what makes the success we report agree with the read tools.
+    const safe = await deps.awaitSafe(address, { safeIsNew: !alreadyCreated });
+    if (!safe) {
+      warnings.push(
+        `The safe for "${parsed.username}" was created and the sponsor grant committed, but it has not ` +
+          `become queryable within the wait budget. Onboarding is COMPLETE — no step needs re-running. ` +
+          `Until the chain catches up, wallet_getting_started may report stage "no-safe": re-check in a ` +
+          `few minutes rather than calling wallet_tx_create_safe, which would create a second safe on ` +
+          `this key.`,
+      );
+    }
+    return {
+      ...base,
+      stage: 'funded-created',
+      enrolled: false,
+      safe,
+      message:
+        `${created} Gateway enrollment was skipped as requested by the invitation (enroll=false); ` +
+        `the account is fully set up on-chain${safe ? ` (safe ${safe})` : ''}.`,
+      next: 'Optional: bind a gateway passkey any time with wallet_gateway_register using the same invitation link.',
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+
   // 5. Enroll the wallet passkey with the SAME invitation code. Casdoor tracks
   //    enrollment on its own ledger (UsedCount/Quota) and the register path is
   //    idempotent (it falls back to logging in with the code if the invite
@@ -272,7 +393,7 @@ export async function onboardSponsor(
   //    throwing away a completed on-chain onboarding.
   try {
     const reg = await deps.enroll(invite, address, { safeIsNew: !alreadyCreated });
-    saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'enrolled' });
+    saveGrant(parsed.invitationCode, { address, username: parsed.username, stage: 'enrolled', enroll: parsed.enroll });
     return {
       ...base,
       stage: 'funded-created-enrolled',

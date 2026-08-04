@@ -29,6 +29,15 @@ export interface SponsorGrantRecord {
   /** Wallet handle (username@organization) the safe is/was created under. */
   username: string;
   stage: GrantStage;
+  /**
+   * Whether this invite wants gateway enrollment. `false` marks the
+   * fund-and-create-only variant, whose TERMINAL stage is `committed` (it never
+   * reaches `enrolled`). Absent means `true` — back-compat with grants written
+   * before the no-enroll variant existed, all of which were enrol flows. The
+   * resume logic reads this to tell a finished no-enroll grant from one still
+   * mid-flight at `committed`.
+   */
+  enroll?: boolean;
   updatedAt: string;
 }
 

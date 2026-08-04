@@ -9,6 +9,7 @@ import { saveGrant, loadGrant } from '../src/core/idp/sponsorGrants.js';
 
 const CODE = 'invite-code-123';
 const INVITE = `https://gateway.test/signup/app_x?invitationCode=${CODE}&username=kehat@wikey`;
+const INVITE_NO_ENROLL = `${INVITE}&enroll=false`;
 const NEW_KEY = 'omnistar1newkey000000000000';
 const OLD_KEY = 'omnistar1oldkey000000000000';
 const PRIOR = 'omnistar1priordefault000000';
@@ -69,7 +70,9 @@ function deps(over: Partial<OnboardSponsorDeps> = {}): OnboardSponsorDeps {
     },
     createSafe: async () => 'broadcast ok',
     listKeys: () => [PRIOR, NEW_KEY],
+    findLocalAccount: async () => undefined,
     safeExists: async () => false,
+    awaitSafe: async () => SAFE,
     enroll: async () => ({ safe: SAFE, username: 'kehat', organization: 'wikey' }),
     ...over,
   };
@@ -96,6 +99,76 @@ test('happy path funds, creates, commits and enrolls in one call', async () => {
     // Enrollment must bind the key we onboarded, not the ambient default.
     assert.deepEqual(enrolled, [NEW_KEY]);
     assert.equal(loadGrant(CODE)?.stage, 'enrolled');
+  });
+});
+
+test('enroll=false funds and creates the safe but never enrolls', async () => {
+  await withFixture(async () => {
+    stubProxy(() => json({ funded: true }));
+    let enrollCalled = false;
+    const awaited: { address: string; safeIsNew: boolean }[] = [];
+    const res = await onboardSponsor(INVITE_NO_ENROLL, deps({
+      awaitSafe: async (address, { safeIsNew }) => {
+        awaited.push({ address, safeIsNew });
+        return SAFE;
+      },
+      enroll: async () => { enrollCalled = true; return { safe: SAFE, username: 'kehat', organization: 'wikey' }; },
+    }));
+
+    assert.equal(enrollCalled, false, 'a no-enroll invite must not bind a passkey');
+    assert.equal(res.stage, 'funded-created');
+    assert.equal(res.enrolled, false);
+    assert.equal(res.funded, true);
+    assert.equal(res.address, NEW_KEY);
+    assert.match(res.next ?? '', /wallet_gateway_register/);
+    // Terminal breadcrumb for a no-enroll grant is 'committed' + enroll:false.
+    assert.equal(loadGrant(CODE)?.stage, 'committed');
+    assert.equal(loadGrant(CODE)?.enroll, false);
+    // With no enrollment step to absorb it, this branch must do the safe wait
+    // itself — otherwise it returns success while getting_started still reads
+    // stage `no-safe` and tells the user to create a safe they already have.
+    assert.deepEqual(awaited, [{ address: NEW_KEY, safeIsNew: true }]);
+    assert.equal(res.safe, SAFE, 'the resolved safe is reported, not left undefined');
+    assert.equal(res.warnings, undefined);
+  });
+});
+
+test('enroll=false reports a visible-yet timeout as a warning, not a failure', async () => {
+  await withFixture(async () => {
+    stubProxy(() => json({ funded: true }));
+    const res = await onboardSponsor(INVITE_NO_ENROLL, deps({
+      awaitSafe: async () => undefined, // never became queryable in the budget
+    }));
+
+    // Funding, create-safe and the commit all succeeded; a slow chain must not
+    // downgrade the stage or re-run anything.
+    assert.equal(res.stage, 'funded-created');
+    assert.equal(res.funded, true);
+    assert.equal(res.safe, undefined);
+    assert.equal(loadGrant(CODE)?.stage, 'committed');
+    // The warning has to steer the agent AWAY from the destructive "fix".
+    assert.equal(res.warnings?.length, 1);
+    assert.match(res.warnings?.[0] ?? '', /COMPLETE/);
+    assert.match(res.warnings?.[0] ?? '', /wallet_tx_create_safe/);
+  });
+});
+
+test('a completed no-enroll grant short-circuits on re-run, not driven to recovery', async () => {
+  await withFixture(async () => {
+    // Prior no-enroll run finished at 'committed' with enroll:false. A re-run must
+    // read that as done (already-onboarded), NOT resume into the spent proxy grant.
+    saveGrant(CODE, { address: OLD_KEY, username: 'kehat@wikey', stage: 'committed', enroll: false });
+    globalThis.fetch = (async () => {
+      throw new Error('a finished no-enroll onboarding must not re-contact the proxy');
+    }) as typeof fetch;
+
+    const res = await onboardSponsor(INVITE_NO_ENROLL, deps({
+      listKeys: () => [OLD_KEY],
+      findLocalAccount: async () => OLD_KEY,
+    }));
+
+    assert.equal(res.stage, 'already-onboarded');
+    assert.equal(res.address, OLD_KEY);
   });
 });
 
@@ -258,6 +331,80 @@ test('a failed commit warns instead of failing the onboarding', async () => {
 
     assert.equal(res.stage, 'funded-created-enrolled');
     assert.match(res.warnings?.join(' ') ?? '', /ledger still shows this invite as unspent/);
+  });
+});
+
+test('a handle we already own short-circuits before minting or calling the proxy', async () => {
+  await withFixture(async () => {
+    // Any proxy call at all is a failure here: the answer is knowable locally.
+    globalThis.fetch = (async () => {
+      throw new Error('the proxy must not be contacted when the account is already ours');
+    }) as typeof fetch;
+    let minted = false;
+
+    const res = await onboardSponsor(INVITE, deps({
+      createDefaultKey: async () => { minted = true; return 'created'; },
+      findLocalAccount: async (username) => (username === 'kehat@wikey' ? OLD_KEY : undefined),
+    }));
+
+    assert.equal(res.stage, 'already-onboarded');
+    assert.equal(res.address, OLD_KEY);
+    assert.equal(minted, false, 'no key may be burned to learn what the keystore already knows');
+    assert.equal(res.funded, false);
+    assert.equal(res.keyCreated, false);
+    assert.match(res.message, /already exists on this machine/);
+    // It is not a recovery — the account is already ours.
+    assert.doesNotMatch(res.next ?? '', /wallet_tx_request_recovery/);
+  });
+});
+
+test('the pre-flight only matches the invite handle, not any local account', async () => {
+  await withFixture(async () => {
+    stubProxy(() => json({ funded: true }));
+    // A keystore full of other people's accounts must not block a fresh invite.
+    const res = await onboardSponsor(INVITE, deps({
+      findLocalAccount: async (username) => (username === 'someone.else@wikey' ? OLD_KEY : undefined),
+    }));
+
+    assert.equal(res.stage, 'funded-created-enrolled');
+    assert.equal(res.address, NEW_KEY);
+  });
+});
+
+test('an interrupted grant still resumes even though the handle exists locally', async () => {
+  await withFixture(async () => {
+    // create-safe landed, then the run died: the account exists AND the grant is
+    // uncommitted with no passkey. Short-circuiting here would strand both.
+    saveGrant(CODE, { address: OLD_KEY, username: 'kehat@wikey', stage: 'created' });
+    stubProxy(() => json({ funded: true }));
+
+    const res = await onboardSponsor(INVITE, deps({
+      listKeys: () => [OLD_KEY],
+      safeExists: async () => true,
+      findLocalAccount: async () => OLD_KEY,
+    }));
+
+    assert.equal(res.stage, 'funded-created-enrolled', 'an in-flight grant must finish, not report already-onboarded');
+    assert.equal(res.resumed, true);
+    assert.equal(res.address, OLD_KEY);
+    assert.equal(loadGrant(CODE)?.stage, 'enrolled');
+  });
+});
+
+test('a fully enrolled grant does short-circuit on a re-run', async () => {
+  await withFixture(async () => {
+    saveGrant(CODE, { address: OLD_KEY, username: 'kehat@wikey', stage: 'enrolled' });
+    globalThis.fetch = (async () => {
+      throw new Error('a finished onboarding must not re-contact the proxy');
+    }) as typeof fetch;
+
+    const res = await onboardSponsor(INVITE, deps({
+      listKeys: () => [OLD_KEY],
+      findLocalAccount: async () => OLD_KEY,
+    }));
+
+    assert.equal(res.stage, 'already-onboarded');
+    assert.equal(res.address, OLD_KEY);
   });
 });
 
