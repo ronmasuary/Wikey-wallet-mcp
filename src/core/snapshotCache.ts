@@ -25,6 +25,14 @@ export interface SnapshotIndex {
   bytes: number;
   ts: number;
   safes: SafeIndexEntry[];
+  /**
+   * Discoverability: class → sorted union of object payload keys seen across
+   * ALL safes (field NAMES only, never values). Tells the model which fields
+   * it can request via wallet_snapshot_object / the query `fields` param
+   * without guessing. Top-level (not per-safe) — the map is near-identical
+   * per safe and would only bloat the index.
+   */
+  fields: Record<string, string[]>;
 }
 
 export interface SnapshotRow {
@@ -104,16 +112,24 @@ export class SnapshotCache {
   private indexOf(id: string): SnapshotIndex | null {
     const e = this.store.get(id);
     if (!e) return null;
+    // class → union of object payload keys (names only — H14: never values).
+    const fieldSets: Record<string, Set<string>> = {};
     const safes: SafeIndexEntry[] = e.parsed.safes.map((safe) => {
       const counts: Record<string, number> = {};
       for (const g of safe.groups) {
         for (const n of g.nestedObjects) {
           counts[n.class] = (counts[n.class] ?? 0) + 1;
+          const set = (fieldSets[n.class] ??= new Set());
+          for (const key of Object.keys(n.object)) set.add(key);
         }
       }
       return { address: safe.address, name: safe.name, counts };
     });
-    return { snapshotId: id, address: e.address, bytes: e.bytes, ts: e.ts, safes };
+    const fields: Record<string, string[]> = {};
+    for (const cls of Object.keys(fieldSets).sort()) {
+      fields[cls] = [...fieldSets[cls]!].sort();
+    }
+    return { snapshotId: id, address: e.address, bytes: e.bytes, ts: e.ts, safes, fields };
   }
 
   private evict(now: number): void {

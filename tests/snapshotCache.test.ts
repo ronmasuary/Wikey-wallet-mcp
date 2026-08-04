@@ -42,6 +42,16 @@ test('H14: ingest returns the small index, never raw JSON', () => {
   assert.doesNotMatch(serialized, /\b[0-9a-fA-F]{64}\b/);
 });
 
+test('index.fields maps class -> object field names (discoverability)', () => {
+  const cache = new SnapshotCache();
+  const index = cache.ingest(FIXTURE);
+  assert.ok(index.fields['policy']!.includes('conditions'));
+  assert.ok(index.fields['user']!.includes('public_key'));
+  // Names only, sorted, and the whole index stays under the default budget.
+  assert.deepEqual(index.fields['policy'], [...index.fields['policy']!].sort());
+  assert.ok(Buffer.byteLength(JSON.stringify(index)) < 4096);
+});
+
 test('H14: point lookup {id} is always complete', () => {
   const cache = new SnapshotCache({ maxResultBytes: 10 }); // tiny budget — point lookup ignores it
   const { snapshotId } = cache.ingest(FIXTURE);
