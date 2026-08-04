@@ -253,3 +253,20 @@ test('H14: last-3 eviction', () => {
   cache.ingest(bigSnapshot(1)); // evicts `a`
   assert.throws(() => cache.query(a, {}), /not found|evicted/);
 });
+
+test('size-aware eviction: total-bytes cap evicts oldest, always keeps newest', () => {
+  const one = bigSnapshot(50);
+  const cap = Buffer.byteLength(one) * 2 + 100; // fits two snapshots, not three
+  const cache = new SnapshotCache({ max: 10, maxTotalBytes: cap });
+  const a = cache.ingest(one).snapshotId;
+  const b = cache.ingest(bigSnapshot(50)).snapshotId;
+  const c = cache.ingest(bigSnapshot(50)).snapshotId; // pushes total over cap -> evicts a
+  assert.throws(() => cache.query(a, {}), /not found|evicted/);
+  assert.doesNotThrow(() => cache.query(b, {}));
+  assert.doesNotThrow(() => cache.query(c, {}));
+
+  // A single snapshot larger than the cap is still kept (newest survives).
+  const tiny = new SnapshotCache({ max: 10, maxTotalBytes: 64 });
+  const d = tiny.ingest(bigSnapshot(5)).snapshotId;
+  assert.doesNotThrow(() => tiny.query(d, {}));
+});

@@ -1240,7 +1240,13 @@ async function main(): Promise<void> {
       walletCli: bins.walletCli!,
     },
   });
-  const cache = new SnapshotCache();
+  // WIKEY_SNAPSHOT_MAX_RESULT_BYTES: operator env (not agent-controllable) —
+  // raises the per-response byte budget on hosts with larger tool-result
+  // limits. The 4096 default stays below the smallest known host limit.
+  const maxResultBytes = Number.parseInt(process.env.WIKEY_SNAPSHOT_MAX_RESULT_BYTES ?? '', 10);
+  const cache = new SnapshotCache(
+    Number.isFinite(maxResultBytes) && maxResultBytes > 0 ? { maxResultBytes } : {},
+  );
   const deps: Deps = { session, cache, walletCli: bins.walletCli! };
 
   const server = new Server(

@@ -122,12 +122,16 @@ export interface SnapshotCacheOpts {
   maxResultBytes?: number;
   ttlMs?: number;
   max?: number;
+  /** Heap guard: total raw bytes across cached snapshots (proxy for parse size).
+   * Oldest evicted first; the newest entry is always kept. Default 64 MB. */
+  maxTotalBytes?: number;
 }
 
 export class SnapshotCache {
   private readonly maxResultBytes: number;
   private readonly ttlMs: number;
   private readonly max: number;
+  private readonly maxTotalBytes: number;
   private readonly store = new Map<string, CacheEntry>();
   private counter = 0;
 
@@ -137,6 +141,7 @@ export class SnapshotCache {
     this.maxResultBytes = opts.maxResultBytes ?? 4096;
     this.ttlMs = opts.ttlMs ?? 15 * 60 * 1000;
     this.max = opts.max ?? 3;
+    this.maxTotalBytes = opts.maxTotalBytes ?? 64 * 1024 * 1024;
   }
 
   /** Parse + cache a raw snapshot; return ONLY the small index. */
@@ -180,6 +185,15 @@ export class SnapshotCache {
     }
     // Then enforce last-N (Map preserves insertion order).
     while (this.store.size > this.max) {
+      const oldest = this.store.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.store.delete(oldest);
+    }
+    // Heap guard: snapshots grow with on-chain history, so a count cap alone is
+    // unbounded. Evict oldest while total raw bytes (proxy for the retained
+    // parse) exceed the cap — but always keep the newest entry.
+    const totalBytes = () => [...this.store.values()].reduce((sum, e) => sum + e.bytes, 0);
+    while (this.store.size > 1 && totalBytes() > this.maxTotalBytes) {
       const oldest = this.store.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       this.store.delete(oldest);
