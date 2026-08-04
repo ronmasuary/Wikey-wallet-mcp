@@ -183,3 +183,26 @@ test('e2e: resolveUserDeletion against fixture deleted user throws', () => {
   const safe = findSafe(snap, SAFE_ADDR);
   assert.throws(() => resolveUserDeletion({ destination: SAFE_ADDR, userId: '1b95e3e7-ca38-4446-8426-e3b8176679aa', safe }), /already deleted/);
 });
+
+test('e2e: parser preserves node siblings (name, isValid, process) — field fidelity', () => {
+  const snap = parseSnapshot(readFileSync(FIXTURE, 'utf8'));
+  const safe = findSafe(snap, SAFE_ADDR);
+  const node = safe.groups
+    .flatMap((g) => g.nestedObjects)
+    .find((n) => n.id === 'a6c3dccb-bfe5-4f08-835b-72437b3bf4da')!;
+  assert.ok(node, 'known live user present in fixture');
+  // Governance state must survive parsing — it was previously discarded.
+  const phase = (node.process as { currentPhase?: { name?: string } }).currentPhase;
+  assert.equal(phase?.name, 'Validatad');
+  assert.equal(typeof node.isValid, 'boolean');
+  assert.equal(typeof node.name, 'string');
+});
+
+test('parser omits absent siblings instead of emitting defaults', () => {
+  const snap = parseSnapshot(wrap(makeSafe()));
+  const node = snap.safes[0]!.groups[0]!.nestedObjects[0]!;
+  // makeSafe() nodes carry no name/isValid/process — they must stay absent.
+  assert.equal('name' in node, false);
+  assert.equal('isValid' in node, false);
+  assert.equal('process' in node, false);
+});
