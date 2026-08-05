@@ -162,7 +162,7 @@ const tools = [
   {
     name: 'wallet_snapshot',
     description:
-      "Take a snapshot of the profile's safes and return a SMALL INDEX only: { snapshotId, address, bytes, ts, safes:[{address,name,counts}], fields:{class:[key...]} }. The fields map lists which object payload keys each class carries (e.g. policy: conditions, applyOn) — use it to know what you can request, without guessing. The raw snapshot JSON is NEVER returned (it can exceed a host's tool-result limit and be silently truncated). Use the returned snapshotId with wallet_snapshot_query (enumerate/filter rows), wallet_snapshot_object (ONE object in full — governance state, conditions), or wallet_snapshot_page. Resolves SIGNATURE + parentGroup for delete-user / delete-policy. When address is omitted, uses the configured profile.",
+      "Take a snapshot of the profile's safes and return a SMALL INDEX only: { snapshotId, address, bytes, ts, safes:[{address,name,counts}], fields:{class:[key...]}, siblings:[key...] }. The fields map lists which object payload keys each class carries (e.g. policy: conditions, applyOn) — use it to know what you can request, without guessing. `siblings` lists the node-level keys (process, name, isValid) requestable via `fields` IN ADDITION to the payload keys — `process` carries the governance state and is not in the fields map. On a name clash the payload key wins (a policy's own `name` shadows the sibling). The raw snapshot JSON is NEVER returned (it can exceed a host's tool-result limit and be silently truncated). Use the returned snapshotId with wallet_snapshot_query (enumerate/filter rows), wallet_snapshot_object (ONE object in full — governance state, conditions), or wallet_snapshot_page. Resolves SIGNATURE + parentGroup for delete-user / delete-policy. When address is omitted, uses the configured profile.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -228,13 +228,21 @@ const tools = [
   {
     name: 'wallet_snapshot_object',
     description:
-      'Read ONE object from a cached snapshot COMPLETELY: the full object payload (e.g. policy conditions/applyOn, user public_key, transaction amount) plus name, isValid and process (process.currentPhase = governance state: approved vs pending votes). Use the index fields map from wallet_snapshot to discover which fields a class carries. Byte-budgeted: if the object is too large, the largest fields are dropped and NAMED in omittedFields:[{key,bytes}] — never a silent cut. Use this for depth on a single object; use wallet_snapshot_query to enumerate.',
+      "Read ONE object from a cached snapshot COMPLETELY: the full object payload (e.g. policy conditions/applyOn, user public_key, transaction amount) plus name, isValid and process (process.currentPhase = governance state: approved vs pending votes). Use the index fields map from wallet_snapshot to discover which fields a class carries. Byte-budgeted: if the object is too large, the largest fields are dropped and NAMED in omittedFields:[{key,bytes}] — never a silent cut. IF A FIELD YOU NEED IS IN omittedFields, CALL AGAIN WITH fields:['<key>'] — a whole object may not fit the budget but one field almost always does; asking for less is how you get it. Repeating the same full read returns the same trimmed result. On a multi-safe profile pass `safe`: ids like policy-genesis exist in several safes with DIFFERENT payloads, and without it you get the first match.",
     inputSchema: {
       type: 'object',
       properties: {
         snapshotId: { type: 'string', description: 'snapshotId from wallet_snapshot' },
         id: { type: 'string', description: 'Exact object id (from wallet_snapshot_query rows)' },
         safe: { type: 'string', description: 'Optional safe address (omnistar1...) to narrow the lookup' },
+        fields: {
+          description:
+            "Narrow the read to these keys — payload keys and/or the siblings process/name/isValid. Omit for the whole object; use this to recover a field listed in omittedFields (e.g. fields:['process']). '*' means the whole payload but NOT the siblings, which must be named.",
+          oneOf: [
+            { type: 'array', items: { type: 'string' } },
+            { type: 'string', enum: ['*'] },
+          ],
+        },
       },
       required: ['snapshotId', 'id'],
     },
@@ -799,11 +807,11 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       );
     }
     case 'wallet_snapshot_object': {
-      return cache.object(
-        String(input.snapshotId),
-        String(input.id),
-        input.safe ? { safe: String(input.safe) } : {},
-      );
+      const fields = parseFields(input.fields);
+      return cache.object(String(input.snapshotId), String(input.id), {
+        ...(input.safe ? { safe: String(input.safe) } : {}),
+        ...(fields !== undefined ? { fields } : {}),
+      });
     }
 
     // ── keys ──

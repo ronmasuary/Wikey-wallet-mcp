@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { SnapshotCache } from '../src/core/snapshotCache.js';
+import { SnapshotCache, SIBLING_FIELDS } from '../src/core/snapshotCache.js';
 
 const FIXTURE = readFileSync(new URL('./fixtures/snapshot-fixture.json', import.meta.url), 'utf8');
 const SAFE = 'omnistar1lveyec7dqdt7ypad3fxj0y8wxsyjdjx7vq70n2';
@@ -93,6 +93,95 @@ test('object(): oversized object drops largest fields and NAMES them', () => {
   assert.deepEqual(again.omittedFields, res.omittedFields);
 });
 
+// A node whose COMPLETE read busts the budget because `process` is the single
+// largest value — the real shape of a mainnet transaction (payload ~1.6 KB,
+// process ~2.4 KB), where the full read drops exactly the governance state.
+function processHeavySnapshot(): string {
+  return JSON.stringify({
+    success: true,
+    data: {
+      address: 'omnistar1prof',
+      snapshot: [{
+        address: 'omnistar1bigsafe', name: 'big.safe',
+        groups: [{
+          id: 'Primary', name: 'Primary', isDeleted: false,
+          nestedObjects: [{
+            class: 'transaction', id: 'tx-1', isDeleted: false, isValid: true, name: 'tx one',
+            process: { currentPhase: { index: '3', name: 'Executed', data: 'D'.repeat(380) } },
+            object: {
+              SIGNATURE: 'S'.repeat(64), parentGroup: 'Primary',
+              amount: '1000', asset: 'OST', message: 'M'.repeat(300),
+            },
+          }],
+        }],
+      }],
+    },
+  });
+}
+
+test('object(): fields recovers a sibling the full read had to drop', () => {
+  const cache = new SnapshotCache({ maxResultBytes: 1000 });
+  const { snapshotId } = cache.ingest(processHeavySnapshot());
+
+  // The complete read cannot fit — process is the largest value, so it goes.
+  const full = cache.object(snapshotId, 'tx-1');
+  assert.equal(full.process, undefined, 'process dropped from the full read');
+  assert.ok(full.omittedFields!.some((f) => f.key === 'process'), 'and is named');
+
+  // Repeating the full read is useless — the point of the narrowing path.
+  assert.equal(cache.object(snapshotId, 'tx-1').process, undefined);
+
+  // Asking for LESS returns the field the full read could not carry.
+  const narrowed = cache.object(snapshotId, 'tx-1', { fields: ['process'] });
+  const phase = (narrowed.process as { currentPhase?: { name?: string } })?.currentPhase;
+  assert.equal(phase?.name, 'Executed', 'governance state recovered');
+  assert.equal(narrowed.omittedFields, undefined, 'nothing dropped from the narrow read');
+  assert.deepEqual(narrowed.object, {}, 'payload not requested, so not returned');
+  assert.ok(Buffer.byteLength(JSON.stringify(narrowed)) <= 1000);
+});
+
+test('object(): fields selects payload keys and leaves the rest out', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(processHeavySnapshot());
+  const res = cache.object(snapshotId, 'tx-1', { fields: ['amount', 'asset', 'name'] });
+  assert.deepEqual(Object.keys(res.object).sort(), ['amount', 'asset']);
+  assert.equal(res.object.amount, '1000');
+  assert.equal(res.name, 'tx one', 'sibling selected by name');
+  assert.equal(res.process, undefined, 'unrequested sibling absent');
+  assert.equal(res.unknownFields, undefined);
+});
+
+test('object(): an unknown field is reported, never a silent empty object', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(processHeavySnapshot());
+  const res = cache.object(snapshotId, 'tx-1', { fields: ['no_such_field'] });
+  assert.deepEqual(res.object, {});
+  assert.deepEqual(res.unknownFields, ['no_such_field']);
+});
+
+test("object(): '*' means the whole payload, siblings still need naming", () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(processHeavySnapshot());
+  const star = cache.object(snapshotId, 'tx-1', { fields: '*' });
+  assert.ok(star.object.amount && star.object.SIGNATURE);
+  assert.equal(star.process, undefined, "'*' does not imply siblings");
+  const both = cache.object(snapshotId, 'tx-1', { fields: ['*'] as unknown as string[] });
+  assert.deepEqual(both.unknownFields, ['*'], "'*' inside an array is not a wildcard");
+});
+
+test('query(): fields reaches the process sibling too', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(processHeavySnapshot());
+  const res = cache.query(snapshotId, { id: 'tx-1' }, ['process']);
+  const row = res.rows[0]!;
+  const phase = (row.process as { currentPhase?: { name?: string } })?.currentPhase;
+  assert.equal(phase?.name, 'Executed');
+  assert.deepEqual(row.object, {});
+  // and the legacy summary columns are still there
+  assert.equal(row.id, 'tx-1');
+  assert.ok(row.SIGNATURE);
+});
+
 test('object(): not found -> bounded error with class counts, no id dump', () => {
   const cache = new SnapshotCache();
   const { snapshotId } = cache.ingest(FIXTURE);
@@ -114,6 +203,50 @@ test('index.fields maps class -> object field names (discoverability)', () => {
   // Names only, sorted, and the whole index stays under the default budget.
   assert.deepEqual(index.fields['policy'], [...index.fields['policy']!].sort());
   assert.ok(Buffer.byteLength(JSON.stringify(index)) < 4096);
+});
+
+test('index.siblings names the node-level keys, which fields does NOT carry', () => {
+  const cache = new SnapshotCache();
+  const index = cache.ingest(FIXTURE);
+  // Single source of truth with the resolver — the two can never drift.
+  assert.deepEqual(index.siblings, [...SIBLING_FIELDS]);
+  // The gap this closes: siblings are not payload keys, so no class lists them.
+  for (const cls of Object.keys(index.fields)) {
+    assert.ok(!index.fields[cls]!.includes('process'), `${cls} must not list process`);
+    assert.ok(!index.fields[cls]!.includes('isValid'), `${cls} must not list isValid`);
+  }
+  // Everything named in siblings is actually selectable on a node that has it.
+  const row = cache.object(index.snapshotId, 'policy-genesis', { fields: [...SIBLING_FIELDS] });
+  assert.equal(row?.unknownFields, undefined);
+});
+
+// Why `siblings` is its own key and not merged into the per-class field lists:
+// the two namespaces can collide, and a flat merged list could not say which
+// one a given name resolves to.
+test('a payload key shadows the same-named sibling', () => {
+  const cache = new SnapshotCache();
+  const { snapshotId } = cache.ingest(JSON.stringify({
+    success: true,
+    data: {
+      address: 'omnistar1prof',
+      snapshot: [{
+        address: 'omnistar1safe', name: 'safe',
+        groups: [{
+          id: 'Primary', name: 'Primary', isDeleted: false,
+          nestedObjects: [{
+            class: 'policy', id: 'p-1', isDeleted: false, isValid: true,
+            name: 'node-level name',
+            object: { SIGNATURE: 'S', parentGroup: 'Primary', name: 'payload name' },
+          }],
+        }],
+      }],
+    },
+  }));
+
+  const res = cache.object(snapshotId, 'p-1', { fields: ['name'] });
+  assert.equal(res?.object!['name'], 'payload name'); // payload wins
+  assert.equal(res?.name, undefined); // sibling unreachable on this class
+  assert.equal(res?.unknownFields, undefined); // and NOT reported as unknown
 });
 
 test('H14: point lookup {id} is always complete', () => {

@@ -209,6 +209,17 @@ boundary is **size-bounded, not shape-bounded**: every field stays reachable
 (`fields` selection on `_query`/`_page`, one complete object via `_object`),
 and every cut — rows or fields — is explicitly reported, never silent.
 
+Because the budget applies to `_object` too, a large object comes back trimmed,
+and re-reading it returns the same trim. `fields` on `_object` is the rung above
+that: it narrows the read to named payload keys and/or the `process` / `name` /
+`isValid` siblings, so a field the full read could not carry still fits on its
+own. **Asking for less is how you get more.** On a real 9 MB profile this
+recovered 272 of 278 budget-dropped fields, including 253/253 `process` blocks;
+the residual six are single values larger than the whole budget (up to 18 KB)
+and need `WIKEY_SNAPSHOT_MAX_RESULT_BYTES` raised. A requested key the object
+does not have is returned in `unknownFields`, so an empty payload is never
+ambiguous.
+
 ```mermaid
 graph LR
     A["Client model"] -->|wallet_snapshot / _query / _page / _object| M["MCP core"]

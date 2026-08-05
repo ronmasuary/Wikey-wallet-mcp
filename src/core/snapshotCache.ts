@@ -43,6 +43,15 @@ export interface SnapshotIndex {
    * per safe and would only bloat the index.
    */
   fields: Record<string, string[]>;
+  /**
+   * Node-level keys requestable via `fields` on top of the payload map above —
+   * always SIBLING_FIELDS, so it is listed once here rather than merged into
+   * every class array. Kept a separate namespace on purpose: payload wins on a
+   * name clash (see selectFields), e.g. `policy` carries its own `name` payload
+   * key, so `fields:['name']` on a policy returns that and never the sibling.
+   * A merged per-class list could not express that difference.
+   */
+  siblings: string[];
 }
 
 /**
@@ -51,6 +60,52 @@ export interface SnapshotIndex {
  * row, byte-identical to the historical shape.
  */
 export type FieldSelector = string[] | '*';
+
+/**
+ * Node-level siblings of `object` (see snapshot.ts). They are NOT payload keys,
+ * so `fields:'*'` — which means "the whole object payload" — does not include
+ * them; they must be named explicitly. `process` carries the governance state
+ * (`process.currentPhase`), which is why naming it must be possible: it is the
+ * single largest thing on a typical transaction and therefore the first field
+ * the budget drops, and a narrowed request is the only way to get it back.
+ */
+export const SIBLING_FIELDS = ['process', 'name', 'isValid'] as const;
+
+/** Target of a `fields` selection — the shape shared by rows and object reads. */
+interface Selectable {
+  object?: Record<string, unknown>;
+  process?: Record<string, unknown>;
+  name?: string;
+  isValid?: boolean;
+  unknownFields?: string[];
+}
+
+/**
+ * Write the selected payload keys and siblings of `node` onto `target`.
+ * `'*'` selects the whole payload; siblings must always be named explicitly.
+ * A requested key the node does not carry goes to `unknownFields` — so an
+ * empty `object` can never be mistaken for "the field exists but is empty".
+ */
+function selectFields(target: Selectable, node: NestedObject, fields: FieldSelector): void {
+  const keys = fields === '*' ? Object.keys(node.object) : fields;
+  const object: Record<string, unknown> = {};
+  const unknown: string[] = [];
+  for (const k of keys) {
+    if (k in node.object) {
+      object[k] = node.object[k]; // copy — never expose the cached parse to mutation
+    } else if (k === 'process' && node.process !== undefined) {
+      target.process = { ...node.process };
+    } else if (k === 'name' && node.name !== undefined) {
+      target.name = node.name;
+    } else if (k === 'isValid' && node.isValid !== undefined) {
+      target.isValid = node.isValid;
+    } else {
+      unknown.push(k);
+    }
+  }
+  target.object = object;
+  if (unknown.length > 0) target.unknownFields = unknown;
+}
 
 export interface SnapshotRow {
   safe: string;
@@ -64,8 +119,15 @@ export interface SnapshotRow {
   /** Selected object payload keys (only when `fields` was requested). Nested
    * so a payload field named `id`/`class` can never collide with the row's own. */
   object?: Record<string, unknown>;
+  /** Siblings, present only when named in `fields`. */
+  process?: Record<string, unknown>;
+  name?: string;
+  isValid?: boolean;
   /** Fields dropped from `object` to fit the byte budget — always named. */
   omittedFields?: OmittedField[];
+  /** Requested keys this object does not have — so an empty result is never
+   * mistakable for "the field exists but is empty". */
+  unknownFields?: string[];
 }
 
 export interface QueryFilter {
@@ -113,6 +175,8 @@ export interface ObjectResult {
   process?: Record<string, unknown>;
   object: Record<string, unknown>;
   omittedFields?: OmittedField[];
+  /** Requested keys this object does not have (only when `fields` was used). */
+  unknownFields?: string[];
 }
 
 interface CacheEntry {
@@ -179,7 +243,15 @@ export class SnapshotCache {
     for (const cls of Object.keys(fieldSets).sort()) {
       fields[cls] = [...fieldSets[cls]!].sort();
     }
-    return { snapshotId: id, address: e.address, bytes: e.bytes, ts: e.ts, safes, fields };
+    return {
+      snapshotId: id,
+      address: e.address,
+      bytes: e.bytes,
+      ts: e.ts,
+      safes,
+      fields,
+      siblings: [...SIBLING_FIELDS],
+    };
   }
 
   private evict(now: number): void {
@@ -242,12 +314,7 @@ export class SnapshotCache {
       SIGNATURE: node.object.SIGNATURE,
     };
     if (fields !== undefined) {
-      const keys = fields === '*' ? Object.keys(node.object) : fields;
-      const object: Record<string, unknown> = {};
-      for (const k of keys) {
-        if (k in node.object) object[k] = node.object[k]; // copy — never expose the cached parse to mutation
-      }
-      row.object = object;
+      selectFields(row, node, fields);
       // Headroom (16 B) for the surrounding array/result envelope so a lone
       // max-size row still leaves the whole response under budget.
       this.trimToBudget(row as SnapshotRow & { object: Record<string, unknown> }, this.maxResultBytes - 16);
@@ -310,8 +377,18 @@ export class SnapshotCache {
    * group-membership); optional safe narrows the search. Byte-bounded: if the
    * serialized result exceeds maxResultBytes, the largest values are dropped
    * first and each is NAMED in omittedFields — never a silent cut (H14).
+   *
+   * `opts.fields` NARROWS the read to the named payload keys and/or siblings
+   * (see SIBLING_FIELDS). This is the recovery path for a field the budget
+   * dropped from the full read: the whole object may not fit, but one field
+   * almost always does. Asking for less is how you get more.
    */
-  object(id: string, objectId: string, opts: { safe?: string } = {}, now = Date.now()): ObjectResult {
+  object(
+    id: string,
+    objectId: string,
+    opts: { safe?: string; fields?: FieldSelector } = {},
+    now = Date.now(),
+  ): ObjectResult {
     const entry = this.get(id, now);
     for (const safe of entry.parsed.safes) {
       if (opts.safe && safe.address !== opts.safe) continue;
@@ -325,12 +402,17 @@ export class SnapshotCache {
             class: node.class,
             id: node.id,
             isDeleted: node.isDeleted,
-            // copies — trimming must never mutate the cached parse
-            object: { ...node.object },
+            object: {},
           };
-          if (node.name !== undefined) result.name = node.name;
-          if (node.isValid !== undefined) result.isValid = node.isValid;
-          if (node.process !== undefined) result.process = { ...node.process };
+          if (opts.fields !== undefined) {
+            selectFields(result, node, opts.fields);
+          } else {
+            // copies — trimming must never mutate the cached parse
+            result.object = { ...node.object };
+            if (node.name !== undefined) result.name = node.name;
+            if (node.isValid !== undefined) result.isValid = node.isValid;
+            if (node.process !== undefined) result.process = { ...node.process };
+          }
           return this.trimToBudget(result);
         }
       }
