@@ -25,6 +25,16 @@ export interface ParsedInvite {
    * the default is `true` and existing onboarding is unchanged.
    */
   enroll: boolean;
+  /**
+   * The enroll-only variant (`&enroll=only`): bind a passkey to an account the
+   * invitee ALREADY owns, and fund/create nothing. Routing information only —
+   * it tells the agent to use wallet_gateway_register instead of sponsor
+   * onboarding. It is NOT a security boundary and must never be treated as one:
+   * the invitee can strip it from the link, and the thing that actually stops
+   * them self-funding is the idp having seeded no funding grant for this code
+   * (the proxy then refuses the airdrop outright).
+   */
+  enrollOnly: boolean;
 }
 
 /** Parse the self-contained invite link. Throws if it isn't a signup link with a code. */
@@ -45,9 +55,13 @@ export function parseInvite(link: string): ParsedInvite {
   const at = username.indexOf('@');
   const organization = at > 0 ? username.slice(at + 1) : '';
   // Only the explicit string "false" disables enrollment; anything else (absent,
-  // "true", garbage) keeps the default enrol-after-create behavior.
-  const enroll = u.searchParams.get('enroll') !== 'false';
-  return { host, application, invitationCode, username, organization, enroll };
+  // "true", garbage) keeps the default enrol-after-create behavior. "only" is the
+  // enroll-only variant, which DOES enroll — so it leaves `enroll` true and is
+  // distinguished by its own flag.
+  const enrollParam = u.searchParams.get('enroll');
+  const enroll = enrollParam !== 'false';
+  const enrollOnly = enrollParam === 'only';
+  return { host, application, invitationCode, username, organization, enroll, enrollOnly };
 }
 
 export interface SponsorFundResult {
@@ -70,6 +84,13 @@ export interface SponsorFundResult {
    * already on that key and only it can finish the onboarding.
    */
   reservedAddress?: string;
+  /**
+   * `false` when the proxy refused because this code carries an enroll-only
+   * marker (no funding grant at all). Distinguishes "this invitation was never
+   * meant to fund anything" from "the grant was spent", which look identical
+   * from the status code alone. Absent against a proxy that predates the marker.
+   */
+  sponsored?: boolean;
   message?: string;
 }
 
@@ -113,7 +134,13 @@ export async function sponsorFund(
     body: JSON.stringify({ code: parsed.invitationCode, address }),
   });
   const text = await res.text();
-  let body: { funded?: boolean; message?: string; reservedAddress?: string; committed?: boolean } = {};
+  let body: {
+    funded?: boolean;
+    message?: string;
+    reservedAddress?: string;
+    committed?: boolean;
+    sponsored?: boolean;
+  } = {};
   try {
     body = JSON.parse(text) as typeof body;
   } catch {
@@ -136,6 +163,7 @@ export async function sponsorFund(
       funded: false,
       alreadySpent: body.committed ?? res.status === 403,
       reservedAddress: body.reservedAddress,
+      ...(body.sponsored !== undefined ? { sponsored: body.sponsored } : {}),
       message: body.message || (res.status === 403 ? 'sponsorship already used' : 'sponsorship reserved for another address'),
     };
   }

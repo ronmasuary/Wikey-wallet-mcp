@@ -421,6 +421,75 @@ test('an invite without &username= is rejected before anything is minted', async
   });
 });
 
+test('an enroll=only invite is refused before anything is minted or funded', async () => {
+  await withFixture(async () => {
+    let minted = false;
+    const calls = stubProxy(() => json({ funded: true }));
+    await assert.rejects(
+      onboardSponsor(`${INVITE}&enroll=only`, deps({
+        createDefaultKey: async () => { minted = true; return ''; },
+      })),
+      /ENROLL-ONLY.*wallet_gateway_register/s,
+    );
+    // The wrong-tool check must land before any side effect: no key displaced as
+    // the wallet default, and above all no call to the funding proxy.
+    assert.equal(minted, false);
+    assert.deepEqual(calls, []);
+  });
+});
+
+test('a code with no grant at all is reported as such, never as a recovery', async () => {
+  await withFixture(async () => {
+    // What the proxy returns for an enroll-only marker: refused, nothing spent,
+    // nothing reserved. The status code alone is identical to a spent grant.
+    stubProxy(() =>
+      json(
+        { error: true, message: 'this invitation carries no funding grant (enroll-only)', committed: false, sponsored: false },
+        403,
+      ),
+    );
+    await assert.rejects(
+      onboardSponsor(INVITE, deps()),
+      (e: Error) => {
+        assert.match(e.message, /ENROLL-ONLY invite/);
+        assert.match(e.message, /wallet_gateway_register/);
+        // The old behaviour was a `recovery-required` result sending the user to
+        // find recovery helpers for an account nobody ever created.
+        assert.doesNotMatch(e.message, /wallet_recovery_helpers|wallet_tx_request_recovery/);
+        // The key was already minted by the time the proxy answered — say so.
+        assert.match(e.message, new RegExp(NEW_KEY));
+        return true;
+      },
+    );
+  });
+});
+
+test('an unarmed grant (no enroll-only marker) is also not a recovery', async () => {
+  await withFixture(async () => {
+    // An older proxy, or a genuinely removed grant: same 403, no `sponsored` field.
+    stubProxy(() => json({ error: true, message: 'no valid unspent sponsorship for this code', committed: false }, 403));
+    await assert.rejects(
+      onboardSponsor(INVITE, deps()),
+      (e: Error) => {
+        assert.match(e.message, /no funding grant for this invitation code/);
+        assert.doesNotMatch(e.message, /wallet_recovery_helpers|wallet_tx_request_recovery/);
+        return true;
+      },
+    );
+  });
+});
+
+test('a genuinely spent grant still routes to recovery', async () => {
+  await withFixture(async () => {
+    // The regression guard for the two tests above: committed:true must keep its
+    // existing meaning — this invite really did onboard someone.
+    stubProxy(() => json({ error: true, message: 'sponsorship already spent for this code', committed: true }, 403));
+    const res = await onboardSponsor(INVITE, deps());
+    assert.equal(res.stage, 'recovery-required');
+    assert.equal(res.funded, false);
+  });
+});
+
 test('the invitation code is never written to the grant store', async () => {
   await withFixture(async () => {
     stubProxy(() => json({ funded: true }));

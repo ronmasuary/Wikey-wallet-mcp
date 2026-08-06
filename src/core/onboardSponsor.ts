@@ -162,6 +162,24 @@ export async function onboardSponsor(
   deps: OnboardSponsorDeps,
 ): Promise<OnboardSponsorResult> {
   const parsed = parseInvite(invite);
+  // Wrong tool for this link. Checked before anything else because every step
+  // below has a cost: minting a key displaces the wallet's default, and the
+  // funding call is a real value transfer. An enroll-only invite carries no
+  // grant, so running on regardless could only end in a confusing failure after
+  // leaving a stray key behind.
+  //
+  // This is routing, NOT enforcement — the parameter is trivially strippable.
+  // Nothing here is what keeps an invitee from self-funding; the idp seeds no
+  // grant for these codes, so the proxy refuses the airdrop no matter what the
+  // link says (and the branch below reports that refusal honestly).
+  if (parsed.enrollOnly) {
+    throw new Error(
+      'this is an ENROLL-ONLY invitation (enroll=only): it binds a gateway passkey to an account you ' +
+        'already have, and funds/creates nothing — so there is nothing for this tool to onboard. ' +
+        'Run wallet_gateway_register { invite } instead. If you do not have a wallet account and safe ' +
+        'yet, this is the wrong link: ask your organization for a sponsored onboarding invitation.',
+    );
+  }
   if (!parsed.username) {
     throw new Error(
       'invite link has no &username= — the idp must include the wallet handle, e.g. &username=kehat@wikey',
@@ -255,6 +273,33 @@ export async function onboardSponsor(
     // Re-issue the fund call for the adopted address: idempotent on the proxy
     // (already reserved to it, no second airdrop) and it re-confirms the grant.
     fund = await sponsorFund(invite, deps.query, address);
+  }
+
+  // 2a-bis. No grant exists for this code AT ALL — nothing was ever spent and
+  //     nobody was ever onboarded, so this is not a recovery. The proxy reports
+  //     it with committed:false and no reservedAddress (and, on a proxy that
+  //     knows the marker, sponsored:false for the enroll-only case).
+  //
+  //     Worth separating from the branch below because `recovery-required` tells
+  //     the user their account already exists and to go find recovery helpers —
+  //     advice that is actively wrong here and sends them chasing an account
+  //     nobody created. The two are indistinguishable by HTTP status alone; only
+  //     the body tells them apart.
+  if (!fund.funded && !fund.alreadySpent && !fund.reservedAddress) {
+    // Only the proxy can answer "is there a grant?", so the key is already minted
+    // by the time we find out. Say so plainly — it is now the wallet's default.
+    const stray = keyCreated
+      ? ` Note: the signing key ${address} was created before this was known and is now the wallet's ` +
+        `default${switched}. It is unfunded and unused; set a different default if that is not what you want.`
+      : '';
+    throw new Error(
+      (fund.sponsored === false
+        ? `This invitation carries no funding grant — it is an ENROLL-ONLY invite, meant for someone who ` +
+          `already has a wallet account and safe. Run wallet_gateway_register { invite } instead of onboarding.`
+        : `The proxy has no funding grant for this invitation code, so it cannot fund a key. The invite was ` +
+          `never armed for sponsored onboarding (or its grant was removed) — nothing has been spent and no ` +
+          `account was created, so this is NOT a recovery. Ask your organization to re-issue the invitation.`) + stray,
+    );
   }
 
   // 2b. Genuinely committed (or reserved to a key we do not hold) → recovery.
