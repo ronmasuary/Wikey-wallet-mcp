@@ -11,8 +11,9 @@
 // so they can be unit-tested with a fake `query`.
 
 import { parseSnapshot } from './snapshot.js';
+import { daysSince, type RecoveryRequestRecord } from './recoveryRequests.js';
 
-export type Stage = 'no-key' | 'no-default' | 'unfunded' | 'no-safe' | 'ready';
+export type Stage = 'no-key' | 'no-default' | 'unfunded' | 'no-safe' | 'recovery-pending' | 'ready';
 
 export interface NextStep {
   /** Human-readable instruction the agent can relay verbatim. */
@@ -31,6 +32,8 @@ export interface GettingStartedReport {
   defaultKey?: string;
   funded?: boolean;
   safes: { address: string; name: string }[];
+  /** Present while a recovery this machine requested is still awaiting helpers. */
+  pendingRecovery?: { username: string; requestedAt: string };
   /** Ordered — the first entry is the single most important next move. */
   next: NextStep[];
   /** Populated once a safe exists: the full menu of things the user can do. */
@@ -75,14 +78,25 @@ export interface ProbeResult {
   defaultKey?: string;
   funded?: boolean;
   safes: { address: string; name: string }[];
+  /** An outstanding recovery this machine requested for the default key. */
+  pendingRecovery?: RecoveryRequestRecord;
 }
 
 export function classifyStage(p: ProbeResult): Stage {
   if (p.keyCount === 0) return 'no-key';
   if (!p.defaultKey) return 'no-default';
+  // A visible safe ends every other question — including a pending recovery,
+  // whose completion is precisely "the safe now resolves under the new key".
   if (p.safes.length > 0) return 'ready';
+  // Before anything that could advise creating a safe: a recovery in flight
+  // means the account already exists and must NOT be recreated.
+  if (p.pendingRecovery) return 'recovery-pending';
   if (p.funded === false) return 'unfunded';
-  // funded === true (or unknown) but no safe yet → the next move is the safe.
+  // NOTE: a failed snapshot probe cannot be distinguished from a genuinely
+  // absent account here — the upstream returns 502 for BOTH a missing account
+  // and a real outage (verified 2026-08-05). So "no safe" stays the fallback,
+  // and the protection against acting on it wrongly lives in the no-safe
+  // next-steps (which warn about recovery) rather than in a separate stage.
   return 'no-safe';
 }
 
@@ -153,8 +167,57 @@ function stepsFor(stage: Stage, p: ProbeResult): { summary: string; next: NextSt
             tool: 'wallet_tx_create_safe',
             args: { username: '<your-username>' },
           },
+          // Stateless safety net for the case the breadcrumb cannot cover: a
+          // recovery requested from ANOTHER machine leaves no local record, so
+          // this stage is reached with an account that already exists. Creating a
+          // safe would be the wrong move and is hard to walk back.
+          {
+            action:
+              'RECOVERING an existing account (lost key)? Do NOT create a safe — that makes a second, separate account. Ask wallet_recovery_helpers for the account name to see who can approve, then use wallet_tx_request_recovery.',
+            tool: 'wallet_recovery_helpers',
+            args: { address: '<your-existing-account-name>' },
+          },
         ],
       };
+    case 'recovery-pending': {
+      const rec = p.pendingRecovery!;
+      const days = daysSince(rec.requestedAt);
+      const waited =
+        days === undefined ? '' : days === 0 ? ' (requested today)' : ` (requested ${days} day(s) ago)`;
+      return {
+        // Two different situations land here and this stage cannot tell them
+        // apart without an extra call: helpers still outstanding, and the last
+        // approval already in with the safe still settling. Name both, so the
+        // reader neither reports completion early nor treats the delay as a
+        // fault. The safe appearing under the new key remains the ONLY
+        // completion signal (see classifyStage).
+        summary:
+          `Recovery of "${rec.username}" onto key ${p.defaultKey} is IN PROGRESS${waited} — NOT finished yet. ` +
+          `Either the account's recovery helpers still need to approve (each approves on their own schedule, ` +
+          `so this can take a while), or the last approval has just landed and the safe is still settling — ` +
+          `after the final approval it usually appears here within about a minute, occasionally several ` +
+          `minutes longer. Nothing is wrong in either case. Do NOT create a safe — the account already ` +
+          `exists — and do not attempt anything involving its safe until this reports stage "ready" with ` +
+          `the safe listed, which happens automatically.`,
+        next: [
+          {
+            action:
+              'See who must approve and how many approvals are still required (threshold is a % of the total helper count).',
+            tool: 'wallet_recovery_helpers',
+            args: { address: rec.username },
+          },
+          {
+            action:
+              'Re-send the recovery deeplink to any helper who has not acted yet. Re-running the request is safe and returns the same link.',
+            tool: 'wallet_tx_request_recovery',
+            args: { username: rec.username },
+          },
+          {
+            action: 'Check back later — run wallet_getting_started again; it reports "ready" as soon as the recovery lands.',
+          },
+        ],
+      };
+    }
     case 'ready': {
       const list = p.safes.map((s) => `${s.name || '(unnamed)'} → ${s.address}`).join(', ');
       return {
@@ -181,6 +244,15 @@ export async function buildGettingStarted(
   query: (args: string[]) => Promise<string>,
   serverName: string,
   listKeys: () => string[],
+  /**
+   * Access to the local recovery breadcrumb. Injected (not imported) so the
+   * classifier stays unit-testable with a fake. Omitted → the guide behaves
+   * exactly as before, minus the recovery-pending stage.
+   */
+  recovery?: {
+    load: (address: string) => RecoveryRequestRecord | null;
+    clear: (address: string) => void;
+  },
 ): Promise<GettingStartedReport> {
   const notes: string[] = [];
 
@@ -217,11 +289,31 @@ export async function buildGettingStarted(
       const snap = parseSnapshot(await query(['query', 'snapshot']));
       safes = snap.safes.map((s) => ({ address: s.address, name: s.name }));
     } catch {
-      /* no safe yet, or profile not on-chain — safes stays [] */
+      // No safe yet, or profile not on-chain — safes stays []. This CANNOT be
+      // split into "absent" vs "lookup failed": the snapshot upstream answers
+      // 502 for a missing account, the same status a genuine outage produces
+      // (verified 2026-08-05). Treating a failure as "unknown" here would put
+      // every brand-new user into an unknown state and break first-run
+      // onboarding, so the ambiguity is left where it is and handled by the
+      // recovery breadcrumb + the no-safe warning instead.
     }
   }
 
-  const probe: ProbeResult = { keyCount, defaultKey, funded, safes };
+  // A recovery in flight is the one state where "you have no safe" must not
+  // become "create a safe". Completion needs no extra call: the recovered safe
+  // resolves under the NEW key as soon as the chain finalizes updateUserAddress,
+  // so a non-empty safe list IS the completion signal — clear the breadcrumb.
+  let pendingRecovery: RecoveryRequestRecord | undefined;
+  if (defaultKey && recovery) {
+    pendingRecovery = recovery.load(defaultKey) ?? undefined;
+    if (pendingRecovery && safes.length > 0) {
+      recovery.clear(defaultKey);
+      notes.push(`Recovery of "${pendingRecovery.username}" is complete — this key now owns the account.`);
+      pendingRecovery = undefined;
+    }
+  }
+
+  const probe: ProbeResult = { keyCount, defaultKey, funded, safes, pendingRecovery };
   const stage = classifyStage(probe);
   const { summary, next } = stepsFor(stage, probe);
 
@@ -233,6 +325,9 @@ export async function buildGettingStarted(
     defaultKey,
     funded,
     safes,
+    ...(pendingRecovery
+      ? { pendingRecovery: { username: pendingRecovery.username, requestedAt: pendingRecovery.requestedAt } }
+      : {}),
     next,
     ...(stage === 'ready' ? { capabilities: CAPABILITIES } : {}),
     ...(notes.length ? { notes } : {}),

@@ -100,3 +100,91 @@ test('buildGettingStarted: counts keys from the keystore even when the signer is
   assert.notEqual(r.stage, 'no-key');
   assert.equal(r.stage, 'ready');
 });
+
+// ── recovery-pending ──────────────────────────────────────────────────────────
+// Recovery is open-ended: independent helpers approve on their own schedule, so
+// a request can sit outstanding for weeks. Throughout that window the guide must
+// NOT tell the user to create a safe — the account already exists, and creating
+// one makes a second, separate account.
+
+const REC = { newAddress: ADDR, username: 'alice@acme', requestedAt: new Date().toISOString() };
+
+/** Funded default key whose account is not (yet) visible on-chain. */
+const noSafeQuery = async (args: string[]): Promise<string> => {
+  if (args[0] === 'config') return ADDR;
+  if (args[1] === 'balance') return '{"data":{"balances":[{"amount":"5000"}]}}';
+  if (args[1] === 'snapshot') throw new Error('no profile on-chain yet');
+  return '';
+};
+
+test('classifyStage: a pending recovery outranks no-safe', () => {
+  assert.equal(
+    classifyStage({ keyCount: 1, defaultKey: ADDR, funded: true, safes: [], pendingRecovery: REC }),
+    'recovery-pending',
+  );
+});
+
+test('classifyStage: a visible safe ends a pending recovery (completion signal)', () => {
+  assert.equal(
+    classifyStage({
+      keyCount: 1,
+      defaultKey: ADDR,
+      funded: true,
+      safes: [{ address: SAFE, name: 'alice' }],
+      pendingRecovery: REC,
+    }),
+    'ready',
+  );
+});
+
+test('buildGettingStarted: mid-recovery NEVER recommends create-safe', async () => {
+  const r = await buildGettingStarted(noSafeQuery, 'wikey-wallet-mcp', () => [ADDR], {
+    load: () => REC,
+    clear: () => {},
+  });
+  assert.equal(r.stage, 'recovery-pending');
+  assert.equal(r.pendingRecovery?.username, 'alice@acme');
+  // The invariant this whole change exists to protect.
+  assert.ok(
+    !r.next.some((s) => s.tool === 'wallet_tx_create_safe'),
+    'a pending recovery must never surface wallet_tx_create_safe',
+  );
+  assert.equal(r.next[0]?.tool, 'wallet_recovery_helpers');
+  assert.deepEqual(r.next[0]?.args, { address: 'alice@acme' });
+});
+
+test('buildGettingStarted: recovery completing clears the breadcrumb exactly once', async () => {
+  const readyQuery = async (args: string[]): Promise<string> => {
+    if (args[0] === 'config') return ADDR;
+    if (args[1] === 'balance') return '{"data":{"balances":[{"amount":"5000"}]}}';
+    if (args[1] === 'snapshot')
+      return JSON.stringify({ data: { snapshot: [{ address: SAFE, name: 'alice', groups: [] }] } });
+    return '';
+  };
+  const cleared: string[] = [];
+  const r = await buildGettingStarted(readyQuery, 'wikey-wallet-mcp', () => [ADDR], {
+    load: () => REC,
+    clear: (a) => cleared.push(a),
+  });
+  assert.equal(r.stage, 'ready');
+  assert.deepEqual(cleared, [ADDR]);
+  assert.equal(r.pendingRecovery, undefined, 'a completed recovery is no longer reported as pending');
+});
+
+test('buildGettingStarted: no-safe warns against create-safe when recovering', async () => {
+  // Stateless safety net: a recovery requested on ANOTHER machine leaves no
+  // local breadcrumb, so this stage is still reachable for an existing account.
+  const r = await buildGettingStarted(noSafeQuery, 'wikey-wallet-mcp', () => [ADDR]);
+  assert.equal(r.stage, 'no-safe');
+  assert.equal(r.next[0]?.tool, 'wallet_tx_create_safe');
+  assert.ok(
+    r.next.some((s) => s.tool === 'wallet_recovery_helpers' && /do not create a safe/i.test(s.action)),
+    'no-safe must warn a recovering user not to create a safe',
+  );
+});
+
+test('buildGettingStarted: omitting the recovery accessor preserves old behaviour', async () => {
+  const r = await buildGettingStarted(noSafeQuery, 'wikey-wallet-mcp', () => [ADDR]);
+  assert.equal(r.stage, 'no-safe');
+  assert.equal(r.pendingRecovery, undefined);
+});

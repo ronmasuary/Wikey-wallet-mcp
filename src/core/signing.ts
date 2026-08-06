@@ -198,14 +198,24 @@ export async function runSigningPrompted(o: RunSigningOpts): Promise<string> {
  * `tx send`, whose signer is fixed by `--from` and which reject an unknown
  * `--creator` option. Passing the matching pubkey is what actually routes the
  * SSP proof/signature to `--from` instead of the config default key.
+ *
+ * `ensureSession` brings the SSP session up before the `keys get` lookup, which
+ * talks to the signing-server over HTTP. Without it a cold session fails here
+ * with a bare `fetch failed` naming neither the session nor the key — and, worse,
+ * passing `signingKey` silently opts the call out of lazy bring-up, since the
+ * same call WITHOUT it reaches ensureSession via signPrompted and works fine.
+ * Injected rather than imported so core/ stays transport-agnostic. It is awaited
+ * only AFTER the no-key early return, so omitting `signingKey` still never wakes
+ * the session (reads stay free).
  */
 export async function resolveSignerArgs(
   query: (args: string[]) => Promise<string>,
   signingKey: unknown,
-  opts: { pubkeyOnly?: boolean } = {},
+  opts: { pubkeyOnly?: boolean; ensureSession?: () => Promise<void> } = {},
 ): Promise<string[]> {
   if (signingKey === undefined || signingKey === null || signingKey === '') return [];
   const addr = String(signingKey);
+  if (opts.ensureSession) await opts.ensureSession();
   const raw = await query(['keys', 'get', '--id', addr]);
   let pubkey: string | undefined;
   try {

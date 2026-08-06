@@ -9,6 +9,7 @@ export * from './query.js';
 export * from './gettingStarted.js';
 export * from './onboardSponsor.js';
 export * from './recoveryDeeplink.js';
+export * from './recoveryRequests.js';
 export * from './rotation.js';
 export * from './session.js';
 export * from './binPaths.js';

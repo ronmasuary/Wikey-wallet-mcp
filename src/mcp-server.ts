@@ -51,6 +51,9 @@ import {
   onboardSponsor,
   buildRecoveryDeeplink,
   parseRecoveryDeeplink,
+  saveRecoveryRequest,
+  loadRecoveryRequest,
+  clearRecoveryRequest,
   redact,
   type FieldSelector,
   type PolicyCondition,
@@ -573,11 +576,15 @@ const tools = [
   {
     name: 'wallet_recovery_helpers',
     description:
-      "AUTHORITATIVE list of the account's recovery helpers — call this to answer \"who are the helpers / who can approve a recovery?\" instead of reading it off wallet_profile yourself. Helpers are exactly the `allowed_source` of the policy-allow-updateUserAddress policy, and EVERY entry counts (including any address Wikey added as a default recovery path). Returns { helpers:[{address,name}], count, threshold:{percentage, requiredCount, totalHelpers} }. The on-chain threshold is a PERCENTAGE of the total helper count, so `requiredCount` is the decoded number of approvals needed. Read-only; call it BEFORE wallet_tx_edit_helpers so you know the current helpers and how adding/removing rescales the threshold.",
+      "AUTHORITATIVE list of the account's recovery helpers — call this to answer \"who are the helpers / who can approve a recovery?\" instead of reading it off wallet_profile yourself. Helpers are exactly the `allowed_source` of the policy-allow-updateUserAddress policy, and EVERY entry counts (including any address Wikey added as a default recovery path). Returns { helpers:[{address,name}], count, threshold:{percentage, requiredCount, totalHelpers} }. The on-chain threshold is a PERCENTAGE of the total helper count, so `requiredCount` is the decoded number of approvals needed. Read-only; call it BEFORE wallet_tx_edit_helpers so you know the current helpers and how adding/removing rescales the threshold. `address` accepts an account NAME (e.g. alice@acme) as well as an omnistar1… address — use the name when recovering a LOST key, where the account's address is exactly what the user no longer has. An unknown name/address is an ERROR, never an empty helper list.",
     inputSchema: {
       type: 'object',
       properties: {
-        address: { type: 'string', description: 'omnistar1... address (optional, uses config default)' },
+        address: {
+          type: 'string',
+          description:
+            'omnistar1... address OR account name (e.g. alice@acme). Optional; uses config default. Pass the NAME when the account\'s key was lost.',
+        },
       },
     },
   },
@@ -756,13 +763,24 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
   // Every wallet-cli read runs with HOME pinned to the state root so it reads the
   // SAME co-located config (default-key pointer) the signing paths write (P2).
   const query = (args: string[]) => runQuery({ walletCli, args, env: walletCliEnv() });
+  // Per-call signer override. Bound here (not called bare) so every signing path
+  // resolves `signingKey` with the session guaranteed up: the pubkey lookup is a
+  // `keys get` over the signer's HTTP API, and it runs BEFORE signPrompted would
+  // have reached ensureSession itself. Use this, never resolveSignerArgs directly.
+  const signerArgs = (signingKey: unknown, opts: { pubkeyOnly?: boolean } = {}) =>
+    resolveSignerArgs(query, signingKey, { ...opts, ensureSession: () => session.ensureSession() });
 
   switch (name) {
     // ── orientation ──
     case 'wallet_getting_started':
       // Keys are counted from the keystore directory (listKeystoreAddresses),
       // never via the signer — so an idle SSP session is never misread as no-key.
-      return buildGettingStarted(query, SERVER_NAME, listKeystoreAddresses);
+      // The recovery breadcrumb keeps a key that is mid-recovery from being told
+      // to create a safe — the account already exists and is waiting on helpers.
+      return buildGettingStarted(query, SERVER_NAME, listKeystoreAddresses, {
+        load: loadRecoveryRequest,
+        clear: clearRecoveryRequest,
+      });
 
     // ── reads ──
     case 'wallet_chain_info':
@@ -858,7 +876,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
 
     // ── signing ──
     case 'wallet_tx_create_safe': {
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(['tx', 'create-safe', '--username', String(input.username), '--broadcast', ...signer], []);
     }
     case 'wallet_onboard_sponsor': {
@@ -871,7 +889,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         // than the ambient default: a resumed run adopts the previously funded
         // key, which is not necessarily what user.address points at.
         createSafe: async (username, allowOrg, address) => {
-          const signer = await resolveSignerArgs(query, address);
+          const signer = await signerArgs(address);
           const args = ['tx', 'create-safe', '--username', username, '--broadcast', ...signer];
           if (allowOrg) args.push('--allow-org-username');
           return session.signPrompted(args, []);
@@ -939,7 +957,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // funds), so resolve --from's pubkey and pass --pubkey. Without it wallet-cli
       // signs with the config default key regardless of --from. `send` has no
       // --creator option (it derives creator from --from), so pubkey-only here.
-      const signer = await resolveSignerArgs(query, input.from, { pubkeyOnly: true });
+      const signer = await signerArgs(input.from, { pubkeyOnly: true });
       return session.signPrompted(
         ['tx', 'send', '--from', String(input.from), '--to', String(input.to), '--amount', String(input.amount), '--broadcast', ...signer],
         [],
@@ -962,11 +980,11 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       if (chain) args.push('--chain', chain);
       if (smallCoin !== undefined) args.push('--small-coin', smallCoin.toString());
       args.push('--broadcast');
-      args.push(...(await resolveSignerArgs(query, input.signingKey)));
+      args.push(...(await signerArgs(input.signingKey)));
       return session.signPrompted(args, []);
     }
     case 'wallet_tx_vote': {
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(
         ['tx', 'vote', '--destination', String(input.destination), '--vote', String(input.vote), '--signature', String(input.signature), '--broadcast', ...signer],
         [{ match: 'Add another vote entry?', respond: () => 'n\n' }],
@@ -980,7 +998,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         const profileRaw = await query(['query', 'profile', '--address', oldAddress]);
         resolved = extractUsernameFromProfile(profileRaw);
       }
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       const args = ['tx', 'request-recovery', '--username', resolved, '--broadcast', ...signer];
       // Sponsor/org accounts carry a username@organization handle; recovery must
       // opt into the same @-tolerant validation create-safe uses, or wallet-cli
@@ -1011,6 +1029,13 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const recoveryDeeplink = newAccount
         ? buildRecoveryDeeplink({ newAccount, accountName: resolved })
         : undefined;
+
+      // Record the outstanding recovery so wallet_getting_started reports
+      // "waiting on helpers" instead of "create a safe" for however long the
+      // helpers take. Best-effort: a write failure must not fail a broadcast
+      // that already succeeded.
+      if (newAccount) saveRecoveryRequest({ newAddress: newAccount, username: resolved });
+
       return JSON.stringify(
         {
           tx: txResult,
@@ -1018,6 +1043,14 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
           shareWithHelpers: recoveryDeeplink
             ? `Send this link to a recovery helper. They can open it in the Wikey wallet app, or hand it to their own AI agent (wikey-wallet MCP) to approve recovering "${resolved}" onto your new key.`
             : `Recovery requested for "${resolved}", but the new account address could not be resolved to build a helper deeplink.`,
+          // The request broadcasting cleanly says nothing about completion — the
+          // helpers have not acted yet, and the safe settles after they do.
+          note:
+            `Recovery requested — this is NOT the recovery finishing. It completes only once enough helpers ` +
+            `approve, and each approves on their own schedule. After the final approval the account's safe ` +
+            `usually appears under the new key within about a minute — occasionally several minutes longer. ` +
+            `Do not tell the user the recovery is complete, and do not attempt anything involving the ` +
+            `account's safe, until wallet_getting_started reports stage "ready" with the safe listed.`,
         },
         null,
         2,
@@ -1044,15 +1077,41 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
           'wallet_tx_approve_recovery requires `deeplink`, or both `oldaccount` and `newaccount`.',
         );
       }
-      const signer = await resolveSignerArgs(query, input.signingKey);
-      return session.signPrompted(
+      const signer = await signerArgs(input.signingKey);
+      const tx = await session.signPrompted(
         ['tx', 'approve-recovery', '--oldaccount', oldAccount, '--newaccount', newAccount, '--broadcast', ...signer],
         [],
+      );
+      const txResult: unknown = (() => {
+        try {
+          return JSON.parse(tx);
+        } catch {
+          return tx;
+        }
+      })();
+      // A clean broadcast records THIS helper's approval — it is NOT the recovery
+      // finishing, and a bare `code: 0` reads as "done" to any agent. Two things
+      // can still be outstanding: other helpers, and the safe resolving under the
+      // new key afterwards. Both are named here so the caller cannot infer
+      // completion from a successful tx.
+      return JSON.stringify(
+        {
+          tx: txResult,
+          status: 'approval-recorded',
+          note:
+            `Approval recorded for "${oldAccount}" → ${newAccount}. This is NOT the recovery finishing. ` +
+            `Other helpers may still need to approve, and once the last one does the account's safe usually ` +
+            `appears under the new key within about a minute — occasionally several minutes longer. ` +
+            `Do not tell the user the recovery is complete, and do not attempt anything involving the ` +
+            `account's safe, until wallet_getting_started reports stage "ready" with the safe listed.`,
+        },
+        null,
+        2,
       );
     }
     case 'wallet_tx_create_policy': {
       const typed = input as { destination: string; applyOn: string; conditions: PolicyCondition[]; name?: string; description?: string };
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(
         ['tx', 'create-policy', '--destination', typed.destination, '--apply-on', typed.applyOn, '--broadcast', ...signer],
         buildPolicyQueue(typed),
@@ -1060,7 +1119,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     }
     case 'wallet_tx_edit_policy': {
       const typed = input as { destination: string; policyId: string; signature: string; applyOn: string; conditions: PolicyCondition[]; name?: string; description?: string };
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(
         ['tx', 'edit-policy', '--destination', typed.destination, '--policy-id', typed.policyId, '--signature', typed.signature, '--apply-on', typed.applyOn, '--broadcast', ...signer],
         buildPolicyQueue(typed),
@@ -1071,7 +1130,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const { signature, parentGroup } = resolvePolicyDeletion({ destination, policyId, safe });
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(
         ['tx', 'delete-policy', '--destination', destination, '--policy-id', policyId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signer],
         [],
@@ -1083,7 +1142,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const parentGroup = resolveCreateUserTarget({ destination, group, groups: extractGroupsFromSafe(safe) });
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(
         ['tx', 'create-user', '--destination', destination, '--public-key', user, '--parent-group', parentGroup, '--broadcast', ...signer],
         [],
@@ -1094,7 +1153,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const { signature, parentGroup } = resolveUserDeletion({ destination, userId, safe });
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
       return session.signPrompted(
         ['tx', 'delete-user', '--destination', destination, '--user-id', userId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signer],
         [],
@@ -1104,7 +1163,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return query(['query', 'helpers', ...(input.address ? ['--address', String(input.address)] : [])]);
     case 'wallet_tx_edit_helpers': {
       const { addHelpers = [], removeHelpers = [], threshold } = input as { addHelpers?: string[]; removeHelpers?: string[]; threshold: number };
-      const signer = await resolveSignerArgs(query, input.signingKey);
+      const signer = await signerArgs(input.signingKey);
 
       // Read a config value via the wallet-cli read runner (reads are never locked).
       const cfgGet = async (key: string): Promise<string> => {

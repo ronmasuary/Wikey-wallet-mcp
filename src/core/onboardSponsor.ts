@@ -48,6 +48,7 @@
 import { sponsorFund, sponsorCommit, parseInvite } from './idp/sponsorFund.js';
 import { loadGrant, saveGrant, type GrantStage } from './idp/sponsorGrants.js';
 import { parseDefaultAddress } from './gettingStarted.js';
+import { buildRecoveryDeeplink } from './recoveryDeeplink.js';
 
 export interface OnboardSponsorDeps {
   /** Non-signing wallet-cli runner (same one the read tools use). */
@@ -132,6 +133,16 @@ export interface OnboardSponsorResult {
   createSafeOutput?: string;
   message: string;
   next?: string;
+  /**
+   * `recovery-required` only, and only when the key IS funded: the link the
+   * recovering user forwards to their recovery helpers. Emitted here because
+   * this branch already knows both inputs — the funded new address (`pk`) and
+   * the account name being recovered (`tn`) — so the caller never has to run a
+   * second tool just to obtain a link we could already build. Absent on an
+   * unfunded recovery branch, where the key could not broadcast the request
+   * anyway.
+   */
+  recoveryDeeplink?: string;
   /** Non-fatal problems worth surfacing (e.g. an uncommitted ledger entry). */
   warnings?: string[];
 }
@@ -264,7 +275,10 @@ export async function onboardSponsor(
         : `Invitation "${parsed.username}" was already used to onboard an account — its one-time ` +
           `funding grant is spent, so the key ${address} could not be funded${switched}. ` +
           `Treat re-onboarding as a recovery onto this key.`,
-      next: 'Recover the existing account onto this key: wallet_tx_request_recovery (then approve/vote per the account helpers).',
+      next:
+        `See who must approve a recovery with wallet_recovery_helpers { address: "${parsed.username}" } ` +
+        `(it takes the account NAME, so the lost key is not needed). This key is NOT funded, so it cannot ` +
+        `broadcast wallet_tx_request_recovery yet — it needs gas first.`,
       ...(warnings.length ? { warnings } : {}),
     };
   }
@@ -297,7 +311,15 @@ export async function onboardSponsor(
           message:
             `The username "${parsed.username}" already has an on-chain account, but this invite's ` +
             `grant funded the key ${address}${switched}. Re-onboarding is a recovery, not a new safe.`,
-          next: 'Recover the existing account onto this key: wallet_tx_request_recovery (then approve/vote per the account helpers).',
+          recoveryDeeplink: buildRecoveryDeeplink({
+            newAccount: address,
+            accountName: parsed.username,
+          }),
+          next:
+            `Recovery: see who must approve with wallet_recovery_helpers { address: "${parsed.username}" } ` +
+            `(it takes the account NAME — the lost key is not needed), then broadcast the request with ` +
+            `wallet_tx_request_recovery. Forward recoveryDeeplink to each helper; they approve with ` +
+            `wallet_tx_approve_recovery { deeplink }.`,
           ...(warnings.length ? { warnings } : {}),
         };
       }
