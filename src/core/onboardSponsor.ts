@@ -3,22 +3,30 @@
 // never runs a second tool.
 //
 // Sequence (mirrors the individual flow, funding step swapped for a sponsor grant):
-//   1. mint a FRESH signing key for the invitee and set it as default
+//   1. mint a FRESH signing key for the invitee
 //   2. sponsor-fund that new key against the invite's one-time code (proxy airdrops gas)
 //   3. create the invitee's account + safe using the invite's username@organization handle
 //   4. commit the grant (only now is it spent — a failed create-safe never burns it)
 //   5. enroll the wallet passkey against the gateway with the SAME invitation code
 //
 // A sponsor invite always provisions a NEW identity, so step 1 never reuses an
-// existing default key/account. Reusing one would graft the invitee's safe onto a
+// existing key/account. Reusing one would graft the invitee's safe onto a
 // pre-existing account (wrong owner + wrong name — the create-safe user_name
 // message is a no-op when the profile already exists) AND re-fund an
-// already-funded address. We therefore mint a new key even when a default already
-// exists; the displaced default is reported back so a shared/test machine can
-// switch back. NOTE: the wallet-cli stack has no HD-index "extra account on the
-// same key" concept (keys create mints an independent keypair; create-safe binds
-// to one address), so here "new identity" == "new key". Index-derived accounts on
-// an existing key would be a separate wallet-cli/signer capability.
+// already-funded address. We therefore always mint a new key.
+//
+// Every step below names the address it acts on explicitly. That used to be
+// impossible: the new key's address was learned by reading back the config
+// default pointer that `keys create` had just moved, so onboarding both depended
+// on and disturbed global signing identity — an existing account on the same
+// machine silently lost its default to the invitee's key. Now `keys create`
+// reports its own address, onboarding carries it through, and nothing else on
+// the machine changes.
+//
+// NOTE: the wallet-cli stack has no HD-index "extra account on the same key"
+// concept (keys create mints an independent keypair; create-safe binds to one
+// address), so here "new identity" == "new key". Index-derived accounts on an
+// existing key would be a separate wallet-cli/signer capability.
 //
 // PRE-FLIGHT: is this handle already ours? Before minting or funding anything we
 // ask whether some key in THIS keystore already owns an account named for the
@@ -47,14 +55,17 @@
 
 import { sponsorFund, sponsorCommit, parseInvite } from './idp/sponsorFund.js';
 import { loadGrant, saveGrant, type GrantStage } from './idp/sponsorGrants.js';
-import { parseDefaultAddress } from './gettingStarted.js';
 import { buildRecoveryDeeplink } from './recoveryDeeplink.js';
 
 export interface OnboardSponsorDeps {
   /** Non-signing wallet-cli runner (same one the read tools use). */
   query: (args: string[]) => Promise<string>;
-  /** Create a new signing key and set it as default; returns wallet-cli output. */
-  createDefaultKey: () => Promise<string>;
+  /**
+   * Mint a fresh signing key and return its identity. It is NOT made a default
+   * (there is none): the address comes back from `keys create`'s own output, so
+   * onboarding knows exactly which key it minted without consulting any pointer.
+   */
+  createKey: () => Promise<{ address: string; pubkey: string }>;
   /**
    * Broadcast create-safe for `username`, signed by `address` explicitly (never
    * the ambient default — on a resumed run the funded key may not be the
@@ -147,16 +158,6 @@ export interface OnboardSponsorResult {
   warnings?: string[];
 }
 
-async function currentDefaultAddress(
-  query: (args: string[]) => Promise<string>,
-): Promise<string | undefined> {
-  try {
-    return parseDefaultAddress(await query(['config', 'get', 'user.address']));
-  } catch {
-    return undefined;
-  }
-}
-
 export async function onboardSponsor(
   invite: string,
   deps: OnboardSponsorDeps,
@@ -232,47 +233,37 @@ export async function onboardSponsor(
   let address: string;
   let keyCreated = false;
   let resumed = false;
-  let switched = '';
 
   if (priorGrant && owned(priorGrant.address)) {
     address = priorGrant.address;
     resumed = true;
   } else {
-    const priorDefault = await currentDefaultAddress(deps.query);
-    await deps.createDefaultKey();
-    const created = await currentDefaultAddress(deps.query);
-    if (!created) throw new Error('signing key created but no default address is set');
-    if (created === priorDefault) {
-      throw new Error('expected a new default key after key creation, but the default is unchanged');
-    }
-    address = created;
+    address = (await deps.createKey()).address;
     keyCreated = true;
-    switched = priorDefault ? ` (default switched from ${priorDefault} to the new key)` : '';
   }
 
   // 2. Sponsor-fund against the one-time invitation code.
-  let fund = await sponsorFund(invite, deps.query, address);
+  let fund = await sponsorFund(invite, address);
 
   // 2a. Reserved to a DIFFERENT address that we hold locally: a previous run
   //     funded that key and the breadcrumb is gone (or was never written).
   //     Adopt it — the gas is there and only it can finish this grant. The key we
-  //     just minted is left behind unused; say so, because it is now the default.
+  //     just minted is left behind unused; say so, since it still exists.
   if (!fund.funded && !fund.alreadySpent && owned(fund.reservedAddress)) {
     const adopted = fund.reservedAddress as string;
     if (keyCreated) {
       warnings.push(
         `This invite was already funded onto ${adopted} by an earlier run, so onboarding resumed on that key. ` +
-          `The key minted this run (${address}) is unused but is now the wallet's default — ` +
-          `create a new default or re-run onboarding if you expected ${address} to be your account.`,
+          `The key minted this run (${address}) is unused and unfunded; it is simply an extra key in the ` +
+          `keystore and affects nothing else, since no key is a default.`,
       );
     }
     address = adopted;
     resumed = true;
     keyCreated = false;
-    switched = '';
     // Re-issue the fund call for the adopted address: idempotent on the proxy
     // (already reserved to it, no second airdrop) and it re-confirms the grant.
-    fund = await sponsorFund(invite, deps.query, address);
+    fund = await sponsorFund(invite, address);
   }
 
   // 2a-bis. No grant exists for this code AT ALL — nothing was ever spent and
@@ -287,10 +278,10 @@ export async function onboardSponsor(
   //     the body tells them apart.
   if (!fund.funded && !fund.alreadySpent && !fund.reservedAddress) {
     // Only the proxy can answer "is there a grant?", so the key is already minted
-    // by the time we find out. Say so plainly — it is now the wallet's default.
+    // by the time we find out. Say so plainly, but it displaces nothing.
     const stray = keyCreated
-      ? ` Note: the signing key ${address} was created before this was known and is now the wallet's ` +
-        `default${switched}. It is unfunded and unused; set a different default if that is not what you want.`
+      ? ` Note: the signing key ${address} was created before this was known. It is unfunded and unused — ` +
+        `an extra key in the keystore, nothing more.`
       : '';
     throw new Error(
       (fund.sponsored === false
@@ -316,9 +307,9 @@ export async function onboardSponsor(
       enrolled: false,
       message: elsewhere
         ? `Invitation "${parsed.username}" is already funded onto ${fund.reservedAddress}, which is not a key on this ` +
-          `machine — onboarding for it was started elsewhere and only that key can finish it${switched}.`
+          `machine — onboarding for it was started elsewhere and only that key can finish it.`
         : `Invitation "${parsed.username}" was already used to onboard an account — its one-time ` +
-          `funding grant is spent, so the key ${address} could not be funded${switched}. ` +
+          `funding grant is spent, so the key ${address} could not be funded. ` +
           `Treat re-onboarding as a recovery onto this key.`,
       next:
         `See who must approve a recovery with wallet_recovery_helpers { address: "${parsed.username}" } ` +
@@ -355,7 +346,7 @@ export async function onboardSponsor(
           enrolled: false,
           message:
             `The username "${parsed.username}" already has an on-chain account, but this invite's ` +
-            `grant funded the key ${address}${switched}. Re-onboarding is a recovery, not a new safe.`,
+            `grant funded the key ${address}. Re-onboarding is a recovery, not a new safe.`,
           recoveryDeeplink: buildRecoveryDeeplink({
             newAccount: address,
             accountName: parsed.username,
@@ -407,7 +398,7 @@ export async function onboardSponsor(
   };
   const created =
     `${alreadyCreated ? 'Resumed onboarding on the already-funded key' : 'Funded new invitee key'} ${address}` +
-    ` and ${alreadyCreated ? 'confirmed' : 'created'} account + safe "${parsed.username}"${switched}.`;
+    ` and ${alreadyCreated ? 'confirmed' : 'created'} account + safe "${parsed.username}".`;
 
   // 5a. No-enroll variant (invite carried enroll=false): fund + create the safe
   //     only, then stop. The breadcrumb's terminal stage is `committed` (set

@@ -97,18 +97,56 @@ export function walletHome(): string {
   return stateRoot();
 }
 
+/** The account a wallet-cli child should act as. `pubkey` is base64. */
+export interface AccountEnv {
+  address: string;
+  /** Required to SIGN; omit for reads (see the blanking note in walletCliEnv). */
+  pubkey?: string;
+}
+
 /**
- * Child env that relocates wallet-cli's config home under the state root.
- * wallet-cli derives `~/.wallet-cli` via Node's `os.homedir()`, which reads
- * `HOME` on POSIX but `USERPROFILE` on Windows (libuv `uv_os_homedir`). Pinning
- * only `HOME` therefore has NO effect on Windows: the config lands in the real
- * profile dir, desyncs from the keystore, and — because ensureWalletConfig's
- * never-clobber guard checks the state-root path — gets wiped (re-`config init`)
- * on every restart, dropping the default-key pointer. Pin both to fix all OSes.
+ * Child env for every wallet-cli invocation. Two jobs:
+ *
+ * 1. RELOCATE THE CONFIG HOME under the state root. wallet-cli derives
+ *    `~/.wallet-cli` via Node's `os.homedir()`, which reads `HOME` on POSIX but
+ *    `USERPROFILE` on Windows (libuv `uv_os_homedir`). Pinning only `HOME`
+ *    therefore has NO effect on Windows: the config lands in the real profile
+ *    dir, desyncs from the keystore, and — because ensureWalletConfig's
+ *    never-clobber guard checks the state-root path — gets wiped (re-`config
+ *    init`) on every restart. Pin both to fix all OSes.
+ *
+ * 2. ROUTE THE SIGNING KEY per child process. wallet-cli's config loader layers
+ *    env OVER the config file (config/loader.ts), and `WALLET_ADDRESS` /
+ *    `WALLET_PUBKEY` populate `config.user` — the same fields `keys create`
+ *    used to write as the "default key". Injecting them here targets one
+ *    account for the lifetime of this child ONLY, with no shared-file mutation
+ *    and no cross-call race, and it reaches the commands that have no
+ *    `--creator/--pubkey` flags (`keys sign-challenge`, `notification
+ *    configure`, `query assets`) because they all read the same loader.
+ *
+ * Two behaviours worth knowing:
+ *
+ * - INHERITED VALUES ARE DROPPED. Any `WALLET_ADDRESS`/`WALLET_PUBKEY` in the
+ *   MCP's own environment is deleted before we set ours. Left in place they
+ *   would be an ambient default key by another name — exactly what this design
+ *   removes — and one set by the operator rather than the caller.
+ * - OMITTING `pubkey` BLANKS IT. wallet-cli's loader builds `config.user` from
+ *   whichever of the two vars is present and fills the other with `''`, so
+ *   there is no way to inject an address while inheriting the file's pubkey.
+ *   That is deliberate: a read (`query assets`) needs no pubkey, and a signing
+ *   command that reaches here without one fails loudly instead of quietly
+ *   signing with whatever the file happened to hold.
  */
-export function walletCliEnv(): NodeJS.ProcessEnv {
+export function walletCliEnv(account?: AccountEnv): NodeJS.ProcessEnv {
   const home = walletHome();
-  return { ...process.env, HOME: home, USERPROFILE: home };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.WALLET_ADDRESS;
+  delete env.WALLET_PUBKEY;
+  if (account?.address) {
+    env.WALLET_ADDRESS = account.address;
+    env.WALLET_PUBKEY = account.pubkey ?? '';
+  }
+  return env;
 }
 
 function sspBinDir(): string {

@@ -1,17 +1,14 @@
 // Wallet identity + on-chain snapshot resolution for the Casdoor passkey flow.
 //
-// Resolves the agent's identity exactly the way Casdoor's ValidateObject does:
-//   - account: the SSP default-key address (the profile/account), read from the
-//     co-located wallet-cli config under the state root.
+// Resolves a wallet identity exactly the way Casdoor's ValidateObject does:
+//   - account: the signing-key address (the profile/account) the CALLER named —
+//     never a default; see resolveWalletIdentity.
 //   - safe:    the asset-holding safe linked to the account (survives recovery).
 //   - ecPuk:   the safe's EC public key — the WebAuthn credential public key;
 //     Casdoor derives the bound (safe) address from it.
 
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { Secp256k1, ripemd160, sha256 } from '@cosmjs/crypto';
 import { toBech32, fromHex } from '@cosmjs/encoding';
-import { walletHome } from '../binPaths.js';
 import type { Cfg } from './config.js';
 
 export interface WalletIdentity {
@@ -33,22 +30,6 @@ interface SnapshotObject {
 interface Snapshot {
   groups?: { nestedObjects?: SnapshotObject[] }[];
   assets?: { ecPuk?: string };
-}
-
-/** Account address: CASDOOR_ACCOUNT override, else the co-located default-key pointer. */
-export function readAccountAddress(cfg: Cfg): string {
-  if (cfg.account) return cfg.account;
-  const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
-  try {
-    const wc = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { user?: { address?: string } };
-    const addr = wc.user?.address;
-    if (addr) return addr;
-  } catch {
-    /* fall through to the clear error below */
-  }
-  throw new Error(
-    'no account address — set a default key (wallet_keys_create setDefault:true) or pass CASDOOR_ACCOUNT',
-  );
 }
 
 /** Fetch an omnistar safe/profile snapshot from the WiKey node Casdoor uses. */
@@ -77,17 +58,22 @@ function findObject(snapshot: Snapshot, predicate: (o: SnapshotObject) => boolea
 }
 
 /**
- * Resolve the agent's wallet identity (account, safe, ecPuk, x/y) for Casdoor.
+ * Resolve a wallet identity (account, safe, ecPuk, x/y) for Casdoor.
  *
- * `explicitAccount` overrides both CASDOOR_ACCOUNT and the config default-key
- * pointer. Sponsor onboarding needs it: it knows exactly which key it just
- * onboarded, and on a resumed run that key is not necessarily the config default
- * (a previous attempt may have left a newer key as the default). Passing the
- * address makes enrollment bind to the safe we actually created rather than to
- * whatever the pointer happens to say.
+ * `account` is REQUIRED — there is no default key and no config pointer to fall
+ * back to. It used to be optional, resolving to whatever `user.address` happened
+ * to hold, which meant enrollment could bind a passkey to a different account
+ * than the caller intended (and did, whenever a key creation or recovery had
+ * moved the pointer). The caller now states which account it means; the MCP
+ * settles that with resolveAccount before getting here.
  */
-export async function resolveWalletIdentity(cfg: Cfg, explicitAccount?: string): Promise<WalletIdentity> {
-  const account = explicitAccount || readAccountAddress(cfg);
+export async function resolveWalletIdentity(cfg: Cfg, account: string): Promise<WalletIdentity> {
+  if (!account) {
+    throw new Error(
+      'resolveWalletIdentity requires an account address — this wallet has no default key. ' +
+        'Resolve one first (wallet_accounts lists them).',
+    );
+  }
 
   const accountSnap = await fetchSnapshot(cfg, account);
   const profile = findObject(accountSnap, (o) => o.class === 'profile' && !!o.object?.safes?.length);

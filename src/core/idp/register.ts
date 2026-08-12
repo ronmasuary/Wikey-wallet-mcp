@@ -6,12 +6,12 @@
 // redirectUri (via /api/get-application), signs up with the invitation code (the
 // one-time secret — no password), and binds the wallet passkey to the SAFE.
 //
-// Enroll does NO wallet signing: it reads the account from the co-located config,
-// resolves the safe's ecPuk from chain snapshots, and POSTs WebAuthn signup.
+// Enroll does NO wallet signing: it takes the account from the caller, resolves
+// that account's safe ecPuk from chain snapshots, and POSTs WebAuthn signup.
 
 import { loadCfg } from './config.js';
 import { loadTarget, saveTarget, targetPrevFile, saveCredential, type Target } from './target.js';
-import { resolveWalletIdentity, waitForWalletIdentity, readAccountAddress } from './identity.js';
+import { resolveWalletIdentity, waitForWalletIdentity } from './identity.js';
 import { passwordLogin, signupWithInvitation } from './casdoorSession.js';
 import { buildAttestation } from './webauthn.js';
 import { randomBytes } from 'node:crypto';
@@ -30,9 +30,9 @@ export interface RegisterInput {
   invitationCode?: string;
   password?: string;
   /**
-   * Bind the passkey to THIS account address instead of the config default-key
-   * pointer (see resolveWalletIdentity). Set by sponsor onboarding, which knows
-   * which key it just created the safe on; normal enrollment leaves it unset.
+   * The account whose safe the passkey binds to. REQUIRED — there is no default
+   * key to infer it from. Sponsor onboarding passes the key it just created the
+   * safe on; the MCP dispatcher otherwise settles it with resolveAccount.
    */
   account?: string;
   /**
@@ -205,8 +205,14 @@ export async function gatewayRegister(input: RegisterInput): Promise<RegisterRes
   }
 
   const cfg = loadCfg(saved);
+  if (!input.account) {
+    throw new Error(
+      'wallet_gateway_register requires the account whose safe the passkey binds to — ' +
+        'this wallet has no default key. Pass `account` (wallet_accounts lists them).',
+    );
+  }
   const id = input.waitForSafe
-    ? await waitForWalletIdentity(cfg, input.account || readAccountAddress(cfg))
+    ? await waitForWalletIdentity(cfg, input.account)
     : await resolveWalletIdentity(cfg, input.account);
 
   // 1. bootstrap session (signup-with-code preferred; password for existing users)

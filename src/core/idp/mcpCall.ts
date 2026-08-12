@@ -44,6 +44,8 @@ export interface McpCallInput {
   path?: string;
   /** Reuse an existing passkey access token instead of logging in again. */
   accessToken?: string;
+  /** Wallet account to log in as when no accessToken is given (see LoginInput.account). */
+  account?: string;
   /** OAuth scope to request when logging in (only used when accessToken is omitted). */
   scope?: string;
   /** Extra request headers. */
@@ -135,7 +137,14 @@ export async function gatewayMcpCall(input: McpCallInput, signer: LoginSigner): 
   let objectId: string | undefined;
   let txHash: string | undefined;
   if (!accessToken) {
-    const login = await gatewayLogin({ ...(input.scope ? { scope: input.scope } : {}) }, signer);
+    const login = await gatewayLogin(
+      {
+        ...(input.scope ? { scope: input.scope } : {}),
+        // Same account the injected signer signs with — see LoginInput.account.
+        ...(input.account ? { account: input.account } : {}),
+      },
+      signer,
+    );
     accessToken = login.accessToken;
     loggedIn = true;
     objectId = login.objectId;

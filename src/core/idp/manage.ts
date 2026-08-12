@@ -1,7 +1,5 @@
 // Status + logout for the Casdoor/gateway flow (no network, no signing).
 
-import { loadCfg } from './config.js';
-import { readAccountAddress } from './identity.js';
 import {
   loadTarget,
   loadCredential,
@@ -26,6 +24,13 @@ export interface GatewayStatus {
     account: string;
     registeredAt: string;
   } | null;
+  /**
+   * The account the enrolled passkey is bound to, or null when nothing is
+   * enrolled. This used to report the config default-key pointer — i.e. a guess
+   * at who we were, which could name an account with no passkey at all. The
+   * credential records the account enrollment actually bound, so it is the only
+   * answer that is true by construction.
+   */
   account: string | null;
   credentialMatchesTarget: boolean;
   hasOAuthClient: boolean;
@@ -35,12 +40,7 @@ export interface GatewayStatus {
 export function gatewayStatus(): GatewayStatus {
   const target = loadTarget();
   const cred = loadCredential();
-  let account: string | null = null;
-  try {
-    account = readAccountAddress(loadCfg());
-  } catch {
-    account = null;
-  }
+  const account = cred?.account ?? null;
   const credentialMatchesTarget = Boolean(
     cred && target && cred.organization === target.organization && cred.username === target.username,
   );

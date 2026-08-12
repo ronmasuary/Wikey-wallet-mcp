@@ -45,6 +45,18 @@ export interface LoginInput {
   scope?: string;
   /** OAuth `state` value (default: random). */
   state?: string;
+  /**
+   * The wallet account to log in AS — the key whose profile owns the enrolled
+   * safe. MUST be the same account the injected `signer` signs with: the
+   * on-chain FIDO object is what Casdoor checks, and only the safe's owner can
+   * create it. Resolving the identity from one account while signing with
+   * another produces a login that fails at the chain rather than at the input.
+   *
+   * Optional only for back-compat with callers that have not been converted;
+   * omitted, `resolveWalletIdentity` falls back to the config pointer. Phase 3
+   * removes that fallback.
+   */
+  account?: string;
 }
 
 export interface LoginResult {
@@ -133,7 +145,10 @@ export async function gatewayLogin(input: LoginInput, signer: LoginSigner): Prom
     throw new Error('target has no clientId — re-run wallet_gateway_register with the invite link');
   }
 
-  const id = await resolveWalletIdentity(cfg);
+  // Falls back to the account the passkey was enrolled against: that is a fact
+  // recorded at enrollment, not a guess at who we are, and it is exactly the
+  // account whose safe this login must prove ownership of.
+  const id = await resolveWalletIdentity(cfg, input.account || cred.account);
   if (cred.safe !== id.safe) {
     throw new Error(`enrolled credential safe ${cred.safe} != resolved safe ${id.safe}`);
   }

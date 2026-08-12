@@ -5,11 +5,10 @@
 // so it is gated only by the one-time invitation code. The proxy verifies the
 // code against its `sponsorships` ledger and airdrops gas to the address, once.
 //
-// No signing and no SSP session: it only reads the default key address through
-// the same non-signing `query` runner every read tool uses.
+// No signing and no SSP session: the caller states which address to fund (the
+// key it just minted, or the one a previous run already funded).
 
 import { loadCfg } from './config.js';
-import { parseDefaultAddress } from '../gettingStarted.js';
 
 export interface ParsedInvite {
   host: string;
@@ -95,8 +94,8 @@ export interface SponsorFundResult {
 }
 
 /**
- * Ask the proxy to fund `address` (or the default signing key) against the
- * invite's one-time code. Returns `{funded:true}` on success.
+ * Ask the proxy to fund `address` against the invite's one-time code. Returns
+ * `{funded:true}` on success.
  *
  * The two refusal codes are NOT the same thing and must not be collapsed:
  *   - 403 → the grant is committed (or the code is unknown): genuinely spent,
@@ -106,25 +105,13 @@ export interface SponsorFundResult {
  *     resume on that key rather than declaring a false "already used".
  * Neither is thrown, so the orchestrator can branch on them.
  */
-export async function sponsorFund(
-  invite: string,
-  query: (args: string[]) => Promise<string>,
-  explicitAddress?: string,
-): Promise<SponsorFundResult> {
+export async function sponsorFund(invite: string, address: string): Promise<SponsorFundResult> {
   const parsed = parseInvite(invite);
   const cfg = loadCfg();
 
-  let address = explicitAddress;
-  if (!address) {
-    try {
-      address = parseDefaultAddress(await query(['config', 'get', 'user.address']));
-    } catch {
-      /* no default configured */
-    }
-  }
   if (!address) {
     throw new Error(
-      'no default signing key to fund — create one first (wallet_keys_create {setDefault:true})',
+      'sponsorFund requires the address to fund — there is no default key to infer it from.',
     );
   }
 

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { TEST_ACCOUNT } from './fixtures/testAccount.js';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync as mkdtemp, rmSync, readFileSync, existsSync } from 'node:fs';
@@ -110,7 +111,7 @@ test('first signing call brings up exactly one signing-server (H8 concurrent)', 
   try {
     const { s } = makeSession(port, ctx.dir);
     // two concurrent first-calls
-    const [a, b] = await Promise.all([s.signPrompted([], []), s.signPrompted([], [])]);
+    const [a, b] = await Promise.all([s.signPrompted(TEST_ACCOUNT, [], []), s.signPrompted(TEST_ACCOUNT, [], [])]);
     assert.equal(a, '{"ok":true}');
     assert.equal(b, '{"ok":true}');
     const spawns = existsSync(spawnLog) ? readFileSync(spawnLog, 'utf8').trim().split('\n').filter(Boolean) : [];
@@ -135,7 +136,7 @@ test('shutdown kills only our own child; a second dummy signing-server survives 
   try {
     await sleep(200);
     const { s } = makeSession(sessionPort, ctx.dir);
-    await s.signPrompted([], []);
+    await s.signPrompted(TEST_ACCOUNT, [], []);
     const ownPid = s.status().pid!;
     assert.ok(alive(ownPid));
     assert.ok(alive(dummy.pid!));
@@ -161,9 +162,9 @@ test('rotateNow swaps the key and records lastRotation; serialized with signing'
   const ctx = setupEnv(port, { STUB_ROTATE_EXIT: '0', STUB_CONCUR_FILE: concur });
   try {
     const { s } = makeSession(port, ctx.dir);
-    await s.signPrompted([], []); // bring up + first proof
+    await s.signPrompted(TEST_ACCOUNT, [], []); // bring up + first proof
     // race a sign and a rotation — the mutex must serialize the two ssp-util calls
-    await Promise.all([s.signPrompted([], []), s.rotateNow()]);
+    await Promise.all([s.signPrompted(TEST_ACCOUNT, [], []), s.rotateNow()]);
     const st = s.status();
     assert.ok(st.lastRotation && st.lastRotation > 0);
     assert.equal(st.wedged, false);
@@ -216,12 +217,12 @@ test('fatal rotation (exit 4) wedges the session; further signing is refused', a
   const ctx = setupEnv(port, { STUB_ROTATE_EXIT: '4' });
   try {
     const { s } = makeSession(port, ctx.dir);
-    await s.signPrompted([], []); // proof path ignores STUB_ROTATE_EXIT
+    await s.signPrompted(TEST_ACCOUNT, [], []); // proof path ignores STUB_ROTATE_EXIT
     await assert.rejects(s.rotateNow(), /SSP unreachable/);
     assert.equal(s.status().wedged, true);
     assert.equal(s.status().state, 'wedged');
     assert.ok(s.status().wedgedReason?.includes('rotation failed'), `wedgedReason: ${s.status().wedgedReason}`);
-    await assert.rejects(s.signPrompted([], []), /wedged/);
+    await assert.rejects(s.signPrompted(TEST_ACCOUNT, [], []), /wedged/);
     s.shutdown();
   } finally {
     teardownEnv(ctx);
@@ -235,7 +236,7 @@ test('recover() clears a wedge in place and the next signing cold-starts', async
   const ctx = setupEnv(port, { STUB_ROTATE_EXIT: '4' });
   try {
     const { s, logs } = makeSession(port, ctx.dir);
-    await s.signPrompted([], []);
+    await s.signPrompted(TEST_ACCOUNT, [], []);
     const firstPid = s.status().pid!;
     await assert.rejects(s.rotateNow(), /SSP unreachable/);
     assert.equal(s.status().wedged, true);
@@ -246,7 +247,7 @@ test('recover() clears a wedge in place and the next signing cold-starts', async
     assert.equal(stAfter.wedged, false);
     assert.equal(stAfter.state, 'no-session', 'recover is lazy — no spawn until next signing');
 
-    const out = await s.signPrompted([], []); // cold-starts a brand-new child
+    const out = await s.signPrompted(TEST_ACCOUNT, [], []); // cold-starts a brand-new child
     assert.equal(out, '{"ok":true}');
     const healed = s.status();
     assert.ok(healed.active, 'session should be active again after recovery');
@@ -271,7 +272,7 @@ test('an unexpected child death captures exit code + output tail and a wedgedRea
   const ctx = setupEnv(port, { STUB_DIE_AFTER_MS: '150', STUB_DIE_CODE: '7' });
   try {
     const { s } = makeSession(port, ctx.dir);
-    await s.signPrompted([], []); // brings the child up
+    await s.signPrompted(TEST_ACCOUNT, [], []); // brings the child up
     assert.ok(s.status().active);
 
     // wait for the live child to die on its own and the exit handler to wedge us
@@ -301,7 +302,7 @@ test('recover() is a safe no-op once shutdown has been called', async () => {
   const ctx = setupEnv(port);
   try {
     const { s } = makeSession(port, ctx.dir);
-    await s.signPrompted([], []);
+    await s.signPrompted(TEST_ACCOUNT, [], []);
     s.shutdown();
     s.recover(); // must not resurrect a torn-down (process-exiting) manager
     const st = s.status();
@@ -310,4 +311,21 @@ test('recover() is a safe no-op once shutdown has been called', async () => {
   } finally {
     teardownEnv(ctx);
   }
+});
+
+test('signPrompted refuses an account with no pubkey — a read-only account cannot sign', async () => {
+  const s = new SessionManager({
+    bins: { signingServer: SIGNING, sspUtil: SSP, walletCli: WC },
+    nonceFile: path.join(tmpdir(), '.nonce-guard-test'),
+    log: () => {},
+  });
+  // Naming the failure here beats letting wallet-cli blank config.user.pubkey
+  // and fail somewhere deep in the broadcast. Rejects BEFORE any spawn, so it
+  // holds even on hosts where the fixture stubs cannot be spawned.
+  await assert.rejects(
+    s.signPrompted({ address: 'omnistar1readonly' } as never, [], []),
+    /signing requires an explicit account/,
+  );
+  await assert.rejects(s.signPrompted(undefined as never, [], []), /signing requires an explicit account/);
+  s.shutdown();
 });

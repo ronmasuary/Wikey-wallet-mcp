@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { TEST_ACCOUNT } from './fixtures/testAccount.js';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -59,7 +60,7 @@ test('H11: the HMAC key never appears in logs, status, output, or the child argv
   };
 
   try {
-    const out = await s.signPrompted([], []);
+    const out = await s.signPrompted(TEST_ACCOUNT, [], []);
     await s.rotateNow();
 
     // 1. tool output carries no key

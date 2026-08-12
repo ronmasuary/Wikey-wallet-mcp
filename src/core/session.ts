@@ -29,6 +29,7 @@ import {
   keystoreDir,
   walletHome,
   walletCliEnv,
+  type AccountEnv,
   type KekPolicy,
   type WalletCliLauncher,
 } from './binPaths.js';
@@ -377,12 +378,36 @@ export class SessionManager {
 
   // ─── signing / reads ────────────────────────────────────────────────────────
 
-  /** Run a prompt-driven signing op. Lazily brings up SSP, serialized w/ rotation. */
+  /**
+   * Run a prompt-driven signing op AS `account`. Lazily brings up SSP,
+   * serialized w/ rotation.
+   *
+   * The account is REQUIRED, and that is the point: there is no default key, so
+   * every signing path must state who it acts as. Making it a parameter rather
+   * than a runtime lookup means the compiler — not a code review — is what
+   * catches a new signing call that forgot to route one. The address and pubkey
+   * are injected into the child env (see walletCliEnv), which is what reaches
+   * the commands wallet-cli gives no `--creator/--pubkey` flags.
+   *
+   * Callers resolve the account with `resolveAccount` (accounts.ts). Use
+   * `runWithSession` for the one signing command that legitimately has no
+   * account — `keys create`, which may run with an empty keystore.
+   */
   async signPrompted(
+    account: AccountEnv,
     args: string[],
     queue: PromptStep[] | ((all: string) => PromptStep[]),
     opts?: PromptedOpts,
   ): Promise<string> {
+    // Defence in depth against a pubkey-less (read-only) account reaching a
+    // signing path: wallet-cli would blank config.user.pubkey and fail somewhere
+    // deep in the broadcast. Name the real problem here instead.
+    if (!account?.address || !account.pubkey) {
+      throw new Error(
+        'signing requires an explicit account (address + pubkey) — this wallet has no default key. ' +
+          'Resolve one with resolveAccount() first; if several keys exist, ask the user which to use.',
+      );
+    }
     await this.ensureSession();
     return this.mutex.runExclusive(() => {
       if (!this.key) throw new Error('no active HMAC key');
@@ -393,7 +418,9 @@ export class SessionManager {
         key: this.key,
         args,
         queue,
-        env: walletCliEnv(), // co-locate wallet-cli config under the state root
+        // HOME pins the config under the state root; WALLET_ADDRESS/WALLET_PUBKEY
+        // route this child at `account` (env beats the config file).
+        env: walletCliEnv(account),
         ...(opts ? { opts } : {}),
       });
     });
@@ -405,15 +432,22 @@ export class SessionManager {
    * then runs it answering its single y/n confirmation via `input` so wallet-cli
    * emits its JSON result and exits — see runWalletCliWithInput. Serialized with
    * signing/rotation via the same mutex.
+   *
+   * `account` is OPTIONAL here, unlike signPrompted: this path exists for
+   * `keys create`, which mints the wallet's FIRST key and therefore must run
+   * with an empty keystore and no account to act as.
    */
-  async runWithSession(args: string[], opts: { input?: string; timeoutMs?: number } = {}): Promise<string> {
+  async runWithSession(
+    args: string[],
+    opts: { input?: string; timeoutMs?: number; account?: AccountEnv } = {},
+  ): Promise<string> {
     await this.ensureSession();
     return this.mutex.runExclusive(() => {
       if (!this.key) throw new Error('no active HMAC key');
       return runWalletCliWithInput({
         walletCli: this.bins.walletCli,
         args,
-        env: walletCliEnv(), // co-locate wallet-cli config under the state root
+        env: walletCliEnv(opts.account), // config under the state root; account routed when given
         ...(opts.input !== undefined ? { input: opts.input } : {}),
         ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });

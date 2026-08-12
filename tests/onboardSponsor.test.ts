@@ -61,13 +61,11 @@ function stubProxy(fund: (address: string) => Response): string[] {
 
 /** Deps with a happy-path default; every field is overridable per test. */
 function deps(over: Partial<OnboardSponsorDeps> = {}): OnboardSponsorDeps {
-  let defaultKey = PRIOR;
   return {
-    query: async (args) => (args.join(' ') === 'config get user.address' ? defaultKey : ''),
-    createDefaultKey: async () => {
-      defaultKey = NEW_KEY;
-      return 'created';
-    },
+    // No `config get user.address` probe any more: the minted key reports its
+    // own address, so onboarding never reads (or moves) a default pointer.
+    query: async () => '',
+    createKey: async () => ({ address: NEW_KEY, pubkey: 'TkVXS0VZ' }),
     createSafe: async () => 'broadcast ok',
     listKeys: () => [PRIOR, NEW_KEY],
     findLocalAccount: async () => undefined,
@@ -197,7 +195,7 @@ test('breadcrumb resumes the funded key instead of minting a second identity', a
 
     const res = await onboardSponsor(INVITE, deps({
       listKeys: () => [PRIOR, OLD_KEY],
-      createDefaultKey: async () => { minted = true; return 'created'; },
+      createKey: async () => { minted = true; return { address: NEW_KEY, pubkey: 'TkVXS0VZ' }; },
       createSafe: async (_u, _o, address) => { signedBy.push(address); return 'ok'; },
     }));
 
@@ -268,8 +266,11 @@ test('proxy 409 for a locally-held key is adopted, not reported as already-used'
     assert.equal(res.address, OLD_KEY);
     assert.equal(res.resumed, true);
     assert.deepEqual(calls, [`sponsorFund:${NEW_KEY}`, `sponsorFund:${OLD_KEY}`, `sponsorCommit:${OLD_KEY}`]);
-    // The stray minted key is now the default — that must be surfaced.
-    assert.match(res.warnings?.join(' ') ?? '', /unused but is now the wallet's default/);
+    // The stray minted key is still surfaced — but it no longer displaces
+    // anything, which is the whole point: adopting the funded key used to leave
+    // the wallet pointed at an unfunded one.
+    assert.match(res.warnings?.join(' ') ?? '', /unused and unfunded/);
+    assert.doesNotMatch(res.warnings?.join(' ') ?? '', /is now the wallet's default/);
   });
 });
 
@@ -343,7 +344,7 @@ test('a handle we already own short-circuits before minting or calling the proxy
     let minted = false;
 
     const res = await onboardSponsor(INVITE, deps({
-      createDefaultKey: async () => { minted = true; return 'created'; },
+      createKey: async () => { minted = true; return { address: NEW_KEY, pubkey: 'TkVXS0VZ' }; },
       findLocalAccount: async (username) => (username === 'kehat@wikey' ? OLD_KEY : undefined),
     }));
 
@@ -413,7 +414,7 @@ test('an invite without &username= is rejected before anything is minted', async
     let minted = false;
     await assert.rejects(
       onboardSponsor(`https://gateway.test/signup/app_x?invitationCode=${CODE}`, deps({
-        createDefaultKey: async () => { minted = true; return ''; },
+        createKey: async () => { minted = true; return { address: NEW_KEY, pubkey: 'TkVXS0VZ' }; },
       })),
       /no &username=/,
     );
@@ -427,12 +428,12 @@ test('an enroll=only invite is refused before anything is minted or funded', asy
     const calls = stubProxy(() => json({ funded: true }));
     await assert.rejects(
       onboardSponsor(`${INVITE}&enroll=only`, deps({
-        createDefaultKey: async () => { minted = true; return ''; },
+        createKey: async () => { minted = true; return { address: NEW_KEY, pubkey: 'TkVXS0VZ' }; },
       })),
       /ENROLL-ONLY.*wallet_gateway_register/s,
     );
-    // The wrong-tool check must land before any side effect: no key displaced as
-    // the wallet default, and above all no call to the funding proxy.
+    // The wrong-tool check must land before any side effect: no key minted, and
+    // above all no call to the funding proxy.
     assert.equal(minted, false);
     assert.deepEqual(calls, []);
   });

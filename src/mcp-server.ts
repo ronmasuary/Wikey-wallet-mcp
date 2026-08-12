@@ -43,10 +43,17 @@ import {
   resolveUserDeletion,
   resolvePolicyDeletion,
   extractUsernameFromProfile,
-  resolveSignerArgs,
+  listAccounts,
+  parseCreatedKey,
+  resolveAccount,
+  resolveAccountAddress,
+  isChainAddress,
+  signerArgsFor,
   buildPolicyQueue,
   buildEditHelpersQueue,
+  resolveNameViaEditHelpers,
   assertConfigSetAllowed,
+  clearDefaultKeyPointer,
   buildGettingStarted,
   onboardSponsor,
   buildRecoveryDeeplink,
@@ -55,6 +62,8 @@ import {
   loadRecoveryRequest,
   clearRecoveryRequest,
   redact,
+  type AccountEnv,
+  type ResolvedAccount,
   type FieldSelector,
   type PolicyCondition,
   type QueryFilter,
@@ -96,10 +105,15 @@ transactions, and passkey-authorized calls to 3rd-party APIs/MCPs via the gatewa
 Wikey never holds the keys.
 
 FIRST-RUN ONBOARDING IS A SEQUENCE — a brand-new user has nothing set up. Do it in order:
-  1. Create a signing key            → wallet_keys_create { setDefault: true }
+  1. Create a signing key            → wallet_keys_create
   2. Fund that key with OST gas       → the user sends OST to the key's address (required to broadcast anything)
   3. Create a safe + username         → wallet_tx_create_safe
   4. Then: add users, set policies, send assets, or enroll a gateway passkey.
+
+THERE IS NO DEFAULT ACCOUNT. Anything that signs must be told which account to act
+as. With exactly one key that is automatic; with several, the tool REFUSES and you
+must ASK THE USER which account they mean — never pick for them. wallet_accounts
+lists the choices. Their answer goes in the "account" parameter on each call.
 
 WHENEVER the user asks "what can I do?", "what's next?", "help", "how do I start?",
 or seems unsure — call wallet_getting_started FIRST. It inspects live state, reports
@@ -112,13 +126,25 @@ Prefer it over guessing. Reads are free; signing lazily brings up the secure ses
 // wallet_snapshot (index-only), wallet_snapshot_query, wallet_snapshot_page.
 // wallet_snapshot is redefined: it returns the small index, NEVER raw JSON.
 
-// Optional per-call signer override, shared by every signing tool that maps to a
-// dynamic wallet-cli `tx` subcommand (all of them except `tx send`, which uses
-// --from). Resolves to `--creator <addr> --pubkey <b64>`; omitted → config default.
-const SIGNING_KEY_PROP = {
+// Which account this call acts as — the ONE name for that idea across the whole
+// tool surface (signing tools, gateway tools, wallet_assets).
+//
+// There is NO default key: omitting this is only valid when the machine holds
+// exactly one key. With several, the call fails with the account list rather
+// than guessing — picking for the user is what used to sign the wrong key after
+// a key creation or recovery.
+//
+// It was called `signingKey` until 2026-08-10. Two names for one concept made
+// the model choose between them, and the word was wrong twice over: the value
+// may be an account NAME rather than a key, and on the paths with no
+// --creator/--pubkey flags (notification configure, keys sign-challenge, query
+// assets) nothing key-shaped is passed at all — the account is injected as
+// identity. The dispatcher still accepts `signingKey` as an undeclared fallback;
+// see the note there.
+const ACCOUNT_PROP = {
   type: 'string',
   description:
-    'Optional omnistar1… key address to sign with. Omit to use the configured default key. Use to sign with a specific funded key when the default has drifted.',
+    'The account to act as — an omnistar1… key address or an account name (e.g. alice@acme). Omit ONLY when this machine has exactly one key; if it has several, the call fails and you must ASK THE USER which account they mean, then pass their choice. There is no default or remembered account. Call wallet_accounts to list them.',
 } as const;
 
 const tools = [
@@ -126,7 +152,7 @@ const tools = [
   {
     name: 'wallet_getting_started',
     description:
-      'START HERE. Read-only onboarding guide that answers "what can I do next?" / "help" / "how do I start?". Inspects live state (keys, default key, funding, safes), classifies the exact onboarding stage (no-key → no-default → unfunded → no-safe → ready), and returns { stage, summary, next[], capabilities?[] } where next[] names the precise tool to call for the next step. Call this before guiding a new or unsure user. Never signs, never brings up the secure session.',
+      "START HERE. Read-only onboarding guide that answers \"what can I do next?\" / \"help\" / \"how do I start?\". Inspects live state (every local key, its funding and safes) and classifies EACH ACCOUNT separately — stages are no-key → unfunded → no-safe → recovery-pending → ready. Returns { stage, summary, keyCount, accounts[], next[], capabilities?[] }, where each accounts[] entry carries its own stage and next steps. The top-level `stage` is that account's stage when there is exactly one key, and `multiple-accounts` when there are several: with no default key there is no single answer, and a ready account must not mask another one's unfinished recovery — read accounts[] in that case. Call this before guiding a new or unsure user. Never signs, never brings up the secure session.",
     inputSchema: { type: 'object', properties: {} },
   },
   // ── Query tools ──
@@ -261,11 +287,24 @@ const tools = [
   {
     name: 'wallet_assets',
     description:
-      'Get full asset portfolio of the safe (OST + cross-chain assets with smallCoin). Defaults to configured safe. smallCoin is the divisor for converting display amounts to smallest units for wallet_tx_create_transaction.',
+      "Get the full asset portfolio of an account's safes (OST + cross-chain assets with smallCoin). smallCoin is the divisor for converting display amounts to smallest units for wallet_tx_create_transaction. `account` is the KEY/profile address (or account name) that owns the safes — NOT a safe address; the response lists each safe separately. Omit it only when this machine holds exactly one key; with several, ask the user which account and pass it (wallet_accounts lists them).",
     inputSchema: {
       type: 'object',
-      properties: { address: { type: 'string', description: 'omnistar1... safe address (optional)' } },
+      properties: {
+        account: {
+          type: 'string',
+          description:
+            'omnistar1... key address OR account name (e.g. alice@acme) whose safes to read. Optional when there is exactly one key.',
+        },
+      },
     },
+  },
+  // ── Account tools ──
+  {
+    name: 'wallet_accounts',
+    description:
+      "List every signing key on this machine with what the chain says about it: { address, name?, funded?, safes[] }. This is the answer to \"which account should I use?\" — call it whenever a tool reports that several keys exist and none was named, then ASK THE USER which one and pass their choice. `name` is the on-chain account name (e.g. alice@acme) and is absent for a key that has no account yet; `safes` is empty until create-safe lands. There is no default or 'current' account — the choice is made per call. Read-only: counts keys from the keystore directory, never brings up the secure session.",
+    inputSchema: { type: 'object', properties: {} },
   },
   // ── Key tools ──
   {
@@ -285,11 +324,8 @@ const tools = [
   {
     name: 'wallet_keys_create',
     description:
-      'Generate a new keypair in the signing-server. Returns the new omnistar1... address. This is a signing operation — it lazily brings up the secure SSP session on first use.',
-    inputSchema: {
-      type: 'object',
-      properties: { setDefault: { type: 'boolean', description: 'Set this key as the default' } },
-    },
+      'Generate a new keypair in the signing-server. Returns the new omnistar1... address, which is what you pass as `account` to act as it. Creating a key changes NOTHING about existing accounts — there is no default to displace — but it does mean the machine now holds more than one key, so subsequent signing calls will ask which account to use. This is a signing operation: it lazily brings up the secure SSP session on first use.',
+    inputSchema: { type: 'object', properties: {} },
   },
   // ── Config tools ──
   {
@@ -358,7 +394,7 @@ const tools = [
           type: 'string',
           description: 'Safe username (letters, numbers, dots only; no leading/trailing/consecutive dots)',
         },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['username'],
     },
@@ -407,7 +443,7 @@ const tools = [
         tokenAddress: { type: 'string', description: 'ERC20 contract address (0x + 40 hex) — required for ERC20 assets' },
         chain: { type: 'string', enum: ['ethereum', 'polygon', 'base'], description: 'ERC20 chain — required for ERC20 assets' },
         smallCoin: { type: 'number', description: 'ERC20 token divisor — required for ERC20 assets' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'to', 'amount', 'asset', 'feePriority'],
     },
@@ -422,7 +458,7 @@ const tools = [
         destination: { type: 'string', description: 'Safe address (omnistar1...)' },
         vote: { type: 'string', enum: ['YES', 'NO'] },
         signature: { type: 'string', description: 'Omnistar tx hash of the object being voted on' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'vote', 'signature'],
     },
@@ -439,7 +475,7 @@ const tools = [
           type: 'string',
           description: 'omnistar1... address of the account being recovered; the server resolves the username via query profile',
         },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: [],
     },
@@ -458,7 +494,7 @@ const tools = [
         },
         oldaccount: { type: 'string', description: 'Original account username being recovered (tn). Optional if `deeplink` is given.' },
         newaccount: { type: 'string', description: 'New omnistar1... address replacing the old one (pk). Optional if `deeplink` is given.' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: [],
     },
@@ -492,7 +528,7 @@ const tools = [
         },
         name: { type: 'string', description: 'Policy name (optional)' },
         description: { type: 'string', description: 'Policy description (optional)' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'applyOn', 'conditions'],
     },
@@ -525,7 +561,7 @@ const tools = [
         },
         name: { type: 'string', description: 'Policy name (optional, for non-transaction-only applyOn)' },
         description: { type: 'string', description: 'Policy description (optional, for non-transaction-only applyOn)' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'policyId', 'signature', 'applyOn', 'conditions'],
     },
@@ -539,7 +575,7 @@ const tools = [
       properties: {
         destination: { type: 'string', description: 'Safe address (omnistar1...)' },
         policyId: { type: 'string', description: "Policy-object id from wallet_snapshot_query (class === 'policy')." },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'policyId'],
     },
@@ -554,7 +590,7 @@ const tools = [
         destination: { type: 'string', description: "SAFE address (omnistar1...). NEVER the agent's own profile address." },
         user: { type: 'string', description: 'omnistar1... address of the new user (not a username).' },
         group: { type: 'string', description: 'Group ID — literal `Primary` or a UUID. NEVER a group name. Required only if safe has >1 group.' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'user'],
     },
@@ -568,7 +604,7 @@ const tools = [
       properties: {
         destination: { type: 'string', description: 'SAFE address (omnistar1...). Users live in safe groups, not profile groups.' },
         userId: { type: 'string', description: "User-object id from wallet_snapshot_query (class === 'user'). Not an address." },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['destination', 'userId'],
     },
@@ -583,22 +619,39 @@ const tools = [
         address: {
           type: 'string',
           description:
-            'omnistar1... address OR account name (e.g. alice@acme). Optional; uses config default. Pass the NAME when the account\'s key was lost.',
+            'omnistar1... address OR account name (e.g. alice@acme, or a bare handle like createTest1). Optional; uses config default. Pass the NAME when the account\'s key was lost.',
         },
+        account: ACCOUNT_PROP,
       },
+    },
+  },
+  {
+    name: 'wallet_resolve_name',
+    description:
+      "Resolve an on-chain account NAME (alice@acme, or a bare handle like createTest1) to its omnistar1… address, and thereby confirm the account EXISTS. READ-ONLY and signing-free: it drives wallet-cli's own username resolver and aborts before any transaction is built — nothing is signed, nothing is broadcast, the secure session is never woken. Use it BEFORE naming an account as a recovery helper, and to turn a name into the address that wallet_profile / wallet_balance / wallet_snapshot require (those accept an ADDRESS ONLY). An unknown name is an ERROR, never an empty answer. An address passed in comes back unchanged. `account` picks which local account to act as; it must have an on-chain profile.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Account name to resolve (e.g. alice@acme or createTest1).',
+        },
+        account: ACCOUNT_PROP,
+      },
+      required: ['name'],
     },
   },
   {
     name: 'wallet_tx_edit_helpers',
     description:
-      'Add/remove recovery helpers and set threshold. Helpers have no safe permissions — recovery only. Helpers are the `allowed_source` of policy-allow-updateUserAddress; call wallet_recovery_helpers FIRST to see the CURRENT helpers (existing/Wikey-added entries already count) before choosing a threshold. `threshold` is passed as an integer COUNT of helpers required, but is stored on-chain as a PERCENTAGE of the total, so adding/removing helpers rescales it (e.g. 1 of 2 helpers = 50%).',
+      'Add/remove recovery helpers and set threshold. Helpers have no safe permissions — recovery only. Helpers are the `allowed_source` of policy-allow-updateUserAddress; call wallet_recovery_helpers FIRST to see the CURRENT helpers (existing/Wikey-added entries already count) before choosing a threshold. `threshold` is passed as an integer COUNT of helpers required, but is stored on-chain as a PERCENTAGE of the total, so adding/removing helpers rescales it (e.g. 1 of 2 helpers = 50%). `addHelpers` takes an account NAME as readily as an address — wallet-cli resolves it server-side, so do NOT hunt for the address first. An unresolvable name aborts the command BEFORE anything is built, signed or broadcast, so a failed add costs nothing on-chain; use wallet_resolve_name first only when you want to confirm the account exists without running a tx at all.',
     inputSchema: {
       type: 'object',
       properties: {
         addHelpers: { type: 'array', items: { type: 'string' }, description: 'Helper addresses/usernames to add' },
         removeHelpers: { type: 'array', items: { type: 'string' }, description: 'Helper addresses to remove (server resolves the numbered index)' },
         threshold: { type: 'number', description: 'Number of helpers required for recovery (integer count; stored on-chain as a percentage of total helpers)' },
-        signingKey: SIGNING_KEY_PROP,
+        account: ACCOUNT_PROP,
       },
       required: ['threshold'],
     },
@@ -615,7 +668,8 @@ const tools = [
         webhook: { type: 'string', description: 'Comma-separated webhook URLs' },
         telegram: { type: 'string', description: 'Comma-separated Telegram handles/chat IDs' },
         push: { type: 'string', description: 'Comma-separated push tokens' },
-        address: { type: 'string', description: 'Override config user.address' },
+        address: { type: 'string', description: 'Address to register the channels for (defaults to the signing account)' },
+        account: ACCOUNT_PROP,
         url: { type: 'string', description: 'Override config wikeyAuthUrl' },
       },
       required: [],
@@ -626,7 +680,7 @@ const tools = [
   {
     name: 'wallet_gateway_register',
     description:
-      "Enroll this wallet's passkey with a Casdoor/gateway IdP, binding it to the wallet's SAFE (recovery-proof). The realistic path is an invited employee: pass `invite` (the invitation link) and nothing else — the agent derives host/application/organization/pinned-username and the public clientId/redirectUri from the link, signs up with the invitation code (the one-time secret), and binds the passkey. This is ALSO the whole job for an enroll=only invitation link: call this tool alone (NOT wallet_onboard_sponsor) — it funds nothing, creates no key and no safe, and signs no on-chain tx, it only binds a passkey to the account you already have. Existing users without an invite: pass explicit fields + `password`. Requires a default key whose profile has a safe with an EC public key (assets.ecPuk) — if you do not have one yet, you need sponsored onboarding first, not this tool. Persists the target + credential under the state root.",
+      "Enroll this wallet's passkey with a Casdoor/gateway IdP, binding it to the wallet's SAFE (recovery-proof). The realistic path is an invited employee: pass `invite` (the invitation link) and nothing else — the agent derives host/application/organization/pinned-username and the public clientId/redirectUri from the link, signs up with the invitation code (the one-time secret), and binds the passkey. This is ALSO the whole job for an enroll=only invitation link: call this tool alone (NOT wallet_onboard_sponsor) — it funds nothing, creates no key and no safe, and signs no on-chain tx, it only binds a passkey to the account you already have. Existing users without an invite: pass explicit fields + `password`. Binds to `account`'s safe, which must have an EC public key (assets.ecPuk) — if you have no account with a safe yet, you need sponsored onboarding first, not this tool. Persists the target + credential under the state root.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -646,6 +700,7 @@ const tools = [
         origin: { type: 'string', description: 'WebAuthn origin (defaults to https://host).' },
         invitationCode: { type: 'string', description: 'Bootstrap invitation code, if not embedded in `invite`.' },
         password: { type: 'string', description: 'Bootstrap password for an existing user (alternative to an invitation code).' },
+        account: ACCOUNT_PROP,
       },
     },
   },
@@ -658,6 +713,7 @@ const tools = [
       properties: {
         scope: { type: 'string', description: 'OAuth scope to request (default: read).' },
         state: { type: 'string', description: 'OAuth state value (default: random).' },
+        account: ACCOUNT_PROP,
       },
     },
   },
@@ -678,6 +734,7 @@ const tools = [
         headers: { type: 'object', description: 'Optional extra request headers.' },
         accessToken: { type: 'string', description: 'Reuse a passkey token from wallet_gateway_login instead of logging in again.' },
         scope: { type: 'string', description: 'OAuth scope to request when logging in (only used when accessToken is omitted).' },
+        account: ACCOUNT_PROP,
       },
       required: ['server'],
     },
@@ -699,6 +756,7 @@ const tools = [
         path: { type: 'string', description: 'Aggregator path (default `/api/mcp-gateway`).' },
         accessToken: { type: 'string', description: 'Reuse a passkey token from wallet_gateway_login instead of logging in again.' },
         scope: { type: 'string', description: 'OAuth scope to request when logging in (only used when accessToken is omitted).' },
+        account: ACCOUNT_PROP,
         headers: { type: 'object', description: 'Optional extra request headers.' },
       },
     },
@@ -751,6 +809,24 @@ interface Deps {
   walletCli: WalletCliLauncher;
 }
 
+/**
+ * The two signing verbs the gateway passkey flow needs, bound to one account.
+ * Shared by login / api_call / mcp_call so all three sign as the same key they
+ * resolve the safe from — see the note at wallet_gateway_login.
+ */
+function gatewaySigner(session: SessionManager, account: ResolvedAccount): LoginSigner {
+  return {
+    signChallenge: (challengeHex: string) =>
+      session.signPrompted(account, ['keys', 'sign-challenge', '--challenge', challengeHex], []),
+    createFidoObject: ({ safe, uuid, payloadHex }) =>
+      session.signPrompted(
+        account,
+        ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast', ...signerArgsFor(account)],
+        [],
+      ),
+  };
+}
+
 // Loose coercion of the optional `fields` tool arg ('*' | string[]).
 function parseFields(v: unknown): FieldSelector | undefined {
   if (v === '*') return '*';
@@ -763,12 +839,71 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
   // Every wallet-cli read runs with HOME pinned to the state root so it reads the
   // SAME co-located config (default-key pointer) the signing paths write (P2).
   const query = (args: string[]) => runQuery({ walletCli, args, env: walletCliEnv() });
-  // Per-call signer override. Bound here (not called bare) so every signing path
-  // resolves `signingKey` with the session guaranteed up: the pubkey lookup is a
-  // `keys get` over the signer's HTTP API, and it runs BEFORE signPrompted would
-  // have reached ensureSession itself. Use this, never resolveSignerArgs directly.
-  const signerArgs = (signingKey: unknown, opts: { pubkeyOnly?: boolean } = {}) =>
-    resolveSignerArgs(query, signingKey, { ...opts, ensureSession: () => session.ensureSession() });
+  // Same read runner, but acting AS a specific account: the address is injected
+  // into the child's env (WALLET_ADDRESS/WALLET_PUBKEY) instead of relying on a
+  // config pointer. This is the only way to target commands wallet-cli gives no
+  // --address flag (e.g. `query assets`).
+  const queryAs = (account: AccountEnv, args: string[]) =>
+    runQuery({ walletCli, args, env: walletCliEnv(account) });
+  // Settle WHO a call acts as. There is no default key: this returns the only
+  // key when there is one, the named one when the caller chose, and otherwise
+  // throws with the account list so the agent can ask the user.
+  //
+  // One resolution feeds BOTH routings — the child env (WALLET_ADDRESS/
+  // WALLET_PUBKEY, which reaches commands that have no flags) and the
+  // --creator/--pubkey flags via signerArgsFor — so they can never disagree.
+  //
+  // Bound here (not called bare) so the `keys get` pubkey lookup runs with the
+  // session guaranteed up: it talks to the signing-server over HTTP, and would
+  // otherwise fail on a cold session with a bare `fetch failed`.
+  const acct = (requested: unknown) =>
+    resolveAccount(query, listKeystoreAddresses, requested, {
+      ensureSession: () => session.ensureSession(),
+    });
+
+  // The account parameter, with back-compat. `signingKey` was this parameter's
+  // name until 2026-08-10; it is no longer advertised in any schema, but a
+  // caller with the old name hardcoded still works for one release. Safe to
+  // drop later: ignoring it can never sign the wrong key — with one key the
+  // result is identical, and with several the resolver refuses either way.
+  const accountOf = (i: Record<string, unknown>): unknown => i.account ?? i.signingKey;
+
+  // Account NAME → address, through the ONE resolver wallet-cli ships
+  // (ApiClient.resolveUsername). It has no CLI surface of its own, so we reach it
+  // the only way a spawning caller can: `tx edit-helpers` resolves what is typed
+  // at its username prompt, and the probe aborts before anything is built or
+  // signed (see resolveNameViaEditHelpers). Signing-free — the account is settled
+  // with resolveAccountAddress, which never wakes SSP.
+  const resolveName = async (asked: string, requested: unknown) => {
+    const creator = await resolveAccountAddress(query, listKeystoreAddresses, requested);
+    return resolveNameViaEditHelpers({
+      walletCli,
+      creator,
+      name: asked,
+      env: walletCliEnv({ address: creator }),
+    });
+  };
+
+  // The address whose helpers to read, from a name. A LOCAL account's own name
+  // is answered from the keystore listing — free, and the common case — before
+  // falling back to the probe, which is what covers an account this machine
+  // holds no key for (the lost-key user, whose name is their only handle).
+  const resolveHelperTarget = async (asked: string, requested: unknown): Promise<string> => {
+    const local = (await listAccounts(query, listKeystoreAddresses)).find(
+      (a) => a.name && a.name.toLowerCase() === asked.toLowerCase(),
+    );
+    if (local) return local.address;
+    try {
+      return (await resolveName(asked, requested)).address;
+    } catch (e) {
+      throw new Error(
+        `"${asked}" could not be resolved to an account address, so its recovery helpers cannot be ` +
+          `read. This is reported as an error on purpose: wallet-cli's \`query helpers\` accepts an ` +
+          `ADDRESS only, and would answer a name with an empty helper list that reads as "this ` +
+          `account has no helpers". Underlying error: ${(e as Error).message}`,
+      );
+    }
+  };
 
   switch (name) {
     // ── orientation ──
@@ -797,10 +932,15 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return query(args);
     }
     case 'wallet_assets': {
-      const args = ['query', 'assets'];
-      if (input.address) args.push('--address', String(input.address));
-      return query(args);
+      // `query assets` has NO --address flag — it reads config.user.address —
+      // so the account is routed through the child env. (The previous code
+      // pushed --address, which commander rejects outright: wallet_assets was
+      // usable ONLY against the default key.)
+      const address = await resolveAccountAddress(query, listKeystoreAddresses, accountOf(input));
+      return queryAs({ address }, ['query', 'assets']);
     }
+    case 'wallet_accounts':
+      return listAccounts(query, listKeystoreAddresses);
 
     // ── B2 snapshot store (H14) ──
     case 'wallet_snapshot': {
@@ -839,11 +979,17 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return query(['keys', 'get', '--id', String(input.id)]);
     case 'wallet_keys_create': {
       // keys create signs over the signer's HTTP API (no stdin proof) and ends
-      // with a `Set as default? (y/n)` prompt. Answer it (y/n from setDefault)
-      // so wallet-cli prints its JSON result and exits. Run it session-gated —
-      // NOT via the prompt engine, which would deadlock on that y/n and time out
-      // even though the key was already created.
-      return session.runWithSession(['keys', 'create'], { input: input.setDefault ? 'y\n' : 'n\n' });
+      // with a `Set as default? (y/n)` prompt. ALWAYS answer 'n': wallet-cli
+      // still offers to write user.address/user.pubkey, and accepting would
+      // re-introduce the ambient default key this wallet no longer has (and
+      // would silently re-point every unrouted command at the new key). The
+      // answer is still required — it is what makes wallet-cli print its JSON
+      // and exit. Run it session-gated, NOT via the prompt engine, which would
+      // deadlock on that y/n and time out even though the key was created.
+      //
+      // No account is routed: this is the one signing command that must work
+      // with an empty keystore.
+      return session.runWithSession(['keys', 'create'], { input: 'n\n' });
     }
 
     // ── config ──
@@ -876,23 +1022,28 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
 
     // ── signing ──
     case 'wallet_tx_create_safe': {
-      const signer = await signerArgs(input.signingKey);
-      return session.signPrompted(['tx', 'create-safe', '--username', String(input.username), '--broadcast', ...signer], []);
+      const a = await acct(accountOf(input));
+      return session.signPrompted(
+        a,
+        ['tx', 'create-safe', '--username', String(input.username), '--broadcast', ...signerArgsFor(a)],
+        [],
+      );
     }
     case 'wallet_onboard_sponsor': {
       const result = await onboardSponsor(String(input.invite), {
         query,
         // keys create signs over the signer HTTP API and ends with a y/n default
-        // prompt — answer 'y' via runWithSession (same as wallet_keys_create).
-        createDefaultKey: () => session.runWithSession(['keys', 'create'], { input: 'y\n' }),
-        // Sign with the onboarded address EXPLICITLY (--creator/--pubkey) rather
-        // than the ambient default: a resumed run adopts the previously funded
-        // key, which is not necessarily what user.address points at.
+        // prompt — answer 'n' (same as wallet_keys_create: no default key) and
+        // read the new key's identity out of the command's own JSON, so
+        // onboarding never depends on a config pointer it just moved.
+        createKey: async () => parseCreatedKey(await session.runWithSession(['keys', 'create'], { input: 'n\n' })),
+        // Sign as the onboarded address EXPLICITLY: a resumed run adopts the
+        // previously funded key, which is not the key this run may have minted.
         createSafe: async (username, allowOrg, address) => {
-          const signer = await signerArgs(address);
-          const args = ['tx', 'create-safe', '--username', username, '--broadcast', ...signer];
+          const a = await acct(address);
+          const args = ['tx', 'create-safe', '--username', username, '--broadcast', ...signerArgsFor(a)];
           if (allowOrg) args.push('--allow-org-username');
-          return session.signPrompted(args, []);
+          return session.signPrompted(a, args, []);
         },
         listKeys: listKeystoreAddresses,
         // Pre-flight "is this handle already ours?": compare the invite's handle
@@ -953,13 +1104,15 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return JSON.stringify(result, null, 2);
     }
     case 'wallet_tx_send': {
-      // The signer for a bank send is the --from key (you can only spend your own
-      // funds), so resolve --from's pubkey and pass --pubkey. Without it wallet-cli
-      // signs with the config default key regardless of --from. `send` has no
-      // --creator option (it derives creator from --from), so pubkey-only here.
-      const signer = await signerArgs(input.from, { pubkeyOnly: true });
+      // The signer for a bank send IS the --from key (you can only spend your own
+      // funds), so the account is not a free choice here — it is --from, and
+      // resolving it also validates that this machine actually holds that key.
+      // `send` has no --creator option (it derives creator from --from), so the
+      // flags are pubkey-only.
+      const a = await acct(input.from);
       return session.signPrompted(
-        ['tx', 'send', '--from', String(input.from), '--to', String(input.to), '--amount', String(input.amount), '--broadcast', ...signer],
+        a,
+        ['tx', 'send', '--from', a.address, '--to', String(input.to), '--amount', String(input.amount), '--broadcast', ...signerArgsFor(a, { pubkeyOnly: true })],
         [],
       );
     }
@@ -980,13 +1133,15 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       if (chain) args.push('--chain', chain);
       if (smallCoin !== undefined) args.push('--small-coin', smallCoin.toString());
       args.push('--broadcast');
-      args.push(...(await signerArgs(input.signingKey)));
-      return session.signPrompted(args, []);
+      const a = await acct(accountOf(input));
+      args.push(...signerArgsFor(a));
+      return session.signPrompted(a, args, []);
     }
     case 'wallet_tx_vote': {
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       return session.signPrompted(
-        ['tx', 'vote', '--destination', String(input.destination), '--vote', String(input.vote), '--signature', String(input.signature), '--broadcast', ...signer],
+        a,
+        ['tx', 'vote', '--destination', String(input.destination), '--vote', String(input.vote), '--signature', String(input.signature), '--broadcast', ...signerArgsFor(a)],
         [{ match: 'Add another vote entry?', respond: () => 'n\n' }],
       );
     }
@@ -998,27 +1153,20 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         const profileRaw = await query(['query', 'profile', '--address', oldAddress]);
         resolved = extractUsernameFromProfile(profileRaw);
       }
-      const signer = await signerArgs(input.signingKey);
-      const args = ['tx', 'request-recovery', '--username', resolved, '--broadcast', ...signer];
+      const a = await acct(accountOf(input));
+      const args = ['tx', 'request-recovery', '--username', resolved, '--broadcast', ...signerArgsFor(a)];
       // Sponsor/org accounts carry a username@organization handle; recovery must
       // opt into the same @-tolerant validation create-safe uses, or wallet-cli
       // rejects the '@' before signing.
       if (resolved.includes('@')) args.push('--allow-org-username');
-      const tx = await session.signPrompted(args, []);
+      const tx = await session.signPrompted(a, args, []);
 
       // Hand the requester a deeplink to forward to a recovery helper. pk = the
-      // NEW key the account is being recovered onto (the signer); tn = the
-      // account asking for help (the username being recovered).
-      let newAccount = input.signingKey ? String(input.signingKey) : '';
-      if (!newAccount) {
-        try {
-          newAccount =
-            (JSON.parse(await query(['config', 'get', 'user.address'])) as { data?: { value?: string } })
-              ?.data?.value ?? '';
-        } catch {
-          /* address unresolved — deeplink omitted below */
-        }
-      }
+      // NEW key the account is being recovered onto — which is exactly the key
+      // that just signed, so it is the resolved account and needs no separate
+      // lookup (it used to be read back from the config default-key pointer,
+      // which could name a different key entirely).
+      const newAccount = a.address;
       const txResult: unknown = (() => {
         try {
           return JSON.parse(tx);
@@ -1077,9 +1225,10 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
           'wallet_tx_approve_recovery requires `deeplink`, or both `oldaccount` and `newaccount`.',
         );
       }
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       const tx = await session.signPrompted(
-        ['tx', 'approve-recovery', '--oldaccount', oldAccount, '--newaccount', newAccount, '--broadcast', ...signer],
+        a,
+        ['tx', 'approve-recovery', '--oldaccount', oldAccount, '--newaccount', newAccount, '--broadcast', ...signerArgsFor(a)],
         [],
       );
       const txResult: unknown = (() => {
@@ -1111,17 +1260,19 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     }
     case 'wallet_tx_create_policy': {
       const typed = input as { destination: string; applyOn: string; conditions: PolicyCondition[]; name?: string; description?: string };
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       return session.signPrompted(
-        ['tx', 'create-policy', '--destination', typed.destination, '--apply-on', typed.applyOn, '--broadcast', ...signer],
+        a,
+        ['tx', 'create-policy', '--destination', typed.destination, '--apply-on', typed.applyOn, '--broadcast', ...signerArgsFor(a)],
         buildPolicyQueue(typed),
       );
     }
     case 'wallet_tx_edit_policy': {
       const typed = input as { destination: string; policyId: string; signature: string; applyOn: string; conditions: PolicyCondition[]; name?: string; description?: string };
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       return session.signPrompted(
-        ['tx', 'edit-policy', '--destination', typed.destination, '--policy-id', typed.policyId, '--signature', typed.signature, '--apply-on', typed.applyOn, '--broadcast', ...signer],
+        a,
+        ['tx', 'edit-policy', '--destination', typed.destination, '--policy-id', typed.policyId, '--signature', typed.signature, '--apply-on', typed.applyOn, '--broadcast', ...signerArgsFor(a)],
         buildPolicyQueue(typed),
       );
     }
@@ -1130,9 +1281,10 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const { signature, parentGroup } = resolvePolicyDeletion({ destination, policyId, safe });
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       return session.signPrompted(
-        ['tx', 'delete-policy', '--destination', destination, '--policy-id', policyId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signer],
+        a,
+        ['tx', 'delete-policy', '--destination', destination, '--policy-id', policyId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signerArgsFor(a)],
         [],
       );
     }
@@ -1142,9 +1294,10 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const parentGroup = resolveCreateUserTarget({ destination, group, groups: extractGroupsFromSafe(safe) });
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       return session.signPrompted(
-        ['tx', 'create-user', '--destination', destination, '--public-key', user, '--parent-group', parentGroup, '--broadcast', ...signer],
+        a,
+        ['tx', 'create-user', '--destination', destination, '--public-key', user, '--parent-group', parentGroup, '--broadcast', ...signerArgsFor(a)],
         [],
       );
     }
@@ -1153,17 +1306,35 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const snapshot = parseSnapshot(await query(['query', 'snapshot']));
       const safe = findSafe(snapshot, destination);
       const { signature, parentGroup } = resolveUserDeletion({ destination, userId, safe });
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
       return session.signPrompted(
-        ['tx', 'delete-user', '--destination', destination, '--user-id', userId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signer],
+        a,
+        ['tx', 'delete-user', '--destination', destination, '--user-id', userId, '--signature', signature, '--parent-group', parentGroup, '--broadcast', ...signerArgsFor(a)],
         [],
       );
     }
-    case 'wallet_recovery_helpers':
-      return query(['query', 'helpers', ...(input.address ? ['--address', String(input.address)] : [])]);
+    case 'wallet_recovery_helpers': {
+      const asked = input.address == null ? '' : String(input.address).trim();
+      if (!asked) return query(['query', 'helpers']);
+      if (isChainAddress(asked)) return query(['query', 'helpers', '--address', asked]);
+      // A NAME. `query helpers --address` takes an ADDRESS only: handed a name
+      // it answers success:true, policyExists:false, helpers:[] — a silent false
+      // negative indistinguishable from a real account with no helpers. So the
+      // name is NEVER forwarded; it is resolved to an address first, and a name
+      // that cannot be resolved is an error rather than an empty helper list.
+      const address = await resolveHelperTarget(asked, accountOf(input));
+      return query(['query', 'helpers', '--address', address]);
+    }
+    case 'wallet_resolve_name': {
+      const asked = String(input.name ?? '').trim();
+      if (!asked) throw new Error('name is required');
+      // An address is already the answer — no reason to spawn anything.
+      if (isChainAddress(asked)) return { name: asked, address: asked, resolved: false };
+      return { ...(await resolveName(asked, accountOf(input))), resolved: true };
+    }
     case 'wallet_tx_edit_helpers': {
       const { addHelpers = [], removeHelpers = [], threshold } = input as { addHelpers?: string[]; removeHelpers?: string[]; threshold: number };
-      const signer = await signerArgs(input.signingKey);
+      const a = await acct(accountOf(input));
 
       // Read a config value via the wallet-cli read runner (reads are never locked).
       const cfgGet = async (key: string): Promise<string> => {
@@ -1174,9 +1345,8 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
           return '';
         }
       };
-      // The account whose helpers we're editing = the signer. Default key unless a
-      // per-call signingKey routes elsewhere.
-      const creator = input.signingKey ? String(input.signingKey) : await cfgGet('user.address');
+      // The account whose helpers we're editing IS the signer.
+      const creator = a.address;
 
       // ── Isolate the two signings ────────────────────────────────────────────
       // edit-helpers no longer registers the inbox channel inline: the prompt
@@ -1206,15 +1376,19 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       if (!hasInbox) {
         // Isolated signing #1 — inbox registration. A throw here aborts the whole
         // tool call, so we never add a helper without a working inbox channel.
-        // (`notification configure` always signs with the default key.)
-        await session.signPrompted(['notification', 'configure', '--inbox', creator], []);
+        // `notification configure` has no --creator/--pubkey flags, so the env
+        // routing is the ONLY way to aim it at `a` rather than a config pointer.
+        await session.signPrompted(a, ['notification', 'configure', '--inbox', creator], []);
       }
 
       // Isolated signing #2 — the helper tx.
-      return session.signPrompted(['tx', 'edit-helpers', '--broadcast', ...signer], buildEditHelpersQueue(addHelpers, removeHelpers, threshold));
+      return session.signPrompted(a, ['tx', 'edit-helpers', '--broadcast', ...signerArgsFor(a)], buildEditHelpersQueue(addHelpers, removeHelpers, threshold));
     }
     case 'wallet_notification_configure': {
       const { email, sms, webhook, telegram, push, address, url } = input as Record<string, string | undefined>;
+      // No --creator/--pubkey on this command: the signing key comes from the
+      // child env alone. `--address` only sets the address in the request URL.
+      const a = await acct(accountOf(input));
       const args = ['notification', 'configure'];
       if (email) args.push('--email', email);
       if (sms) args.push('--sms', sms);
@@ -1224,56 +1398,50 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       if (address) args.push('--address', address);
       if (url) args.push('--url', url);
       args.push('--sign');
-      return session.signPrompted(args, []);
+      return session.signPrompted(a, args, []);
     }
 
     // ── Casdoor / gateway IDP ──
-    case 'wallet_gateway_register':
-      return gatewayRegister(input as RegisterInput);
+    case 'wallet_gateway_register': {
+      // The passkey binds to THIS account's safe. CASDOOR_ACCOUNT (operator env,
+      // not agent-controllable) still names a fallback when the caller passes
+      // none — but it is resolved like any other request, so an address that is
+      // not in this keystore is an error rather than a silent mis-binding.
+      const a = await acct((input as RegisterInput).account ?? process.env.CASDOOR_ACCOUNT);
+      return gatewayRegister({ ...(input as RegisterInput), account: a.address });
+    }
     case 'wallet_gateway_login': {
-      // Inject the two signing verbs the login needs. Both ride the standard
-      // prompt/proof flow through SSP (empty queue), so the HMAC key + private key
-      // stay sealed in the session — only the signed artifacts cross back here.
-      const signer: LoginSigner = {
-        signChallenge: (challengeHex: string) =>
-          session.signPrompted(['keys', 'sign-challenge', '--challenge', challengeHex], []),
-        createFidoObject: ({ safe, uuid, payloadHex }) =>
-          session.signPrompted(
-            ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast'],
-            [],
-          ),
-      };
-      return gatewayLogin(input as LoginInput, signer);
+      // Inject the two signing verbs the login needs, both bound to the SAME
+      // account whose identity gatewayLogin resolves — the on-chain FIDO object
+      // is the real proof, and only the safe's owner can create it, so signing
+      // as one account while resolving the safe of another fails at the chain.
+      // `keys sign-challenge` has no --creator/--pubkey flags: the env routing
+      // is the only thing aiming it at this account.
+      //
+      // Both ride the standard prompt/proof flow through SSP (empty queue), so
+      // the HMAC key + private key stay sealed — only signed artifacts cross back.
+      const a = await acct(accountOf(input) ?? process.env.CASDOOR_ACCOUNT);
+      return gatewayLogin({ ...(input as LoginInput), account: a.address }, gatewaySigner(session, a));
     }
     case 'wallet_gateway_api_call': {
       // Same injected signer: a fresh login (when no accessToken is passed) needs
       // to sign the on-chain FIDO object + the assertion via the sealed session.
-      const signer: LoginSigner = {
-        signChallenge: (challengeHex: string) =>
-          session.signPrompted(['keys', 'sign-challenge', '--challenge', challengeHex], []),
-        createFidoObject: ({ safe, uuid, payloadHex }) =>
-          session.signPrompted(
-            ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast'],
-            [],
-          ),
-      };
-      return gatewayApiCall(input as unknown as ApiCallInput, signer);
+      const a = await acct(accountOf(input) ?? process.env.CASDOOR_ACCOUNT);
+      return gatewayApiCall(
+        { ...(input as unknown as ApiCallInput), account: a.address },
+        gatewaySigner(session, a),
+      );
     }
     case 'wallet_gateway_mcp_call': {
       // Same injected signer as api_call: a fresh login (when no accessToken is
       // passed) signs the on-chain FIDO object + assertion via the sealed session.
       // The passkey JWT is the ONLY credential sent — the aggregator injects the
       // upstream MCP credential server-side.
-      const signer: LoginSigner = {
-        signChallenge: (challengeHex: string) =>
-          session.signPrompted(['keys', 'sign-challenge', '--challenge', challengeHex], []),
-        createFidoObject: ({ safe, uuid, payloadHex }) =>
-          session.signPrompted(
-            ['tx', 'create-fido-object', '--destination', safe, '--id', uuid, '--payload', payloadHex, '--broadcast'],
-            [],
-          ),
-      };
-      return gatewayMcpCall(input as unknown as McpCallInput, signer);
+      const a = await acct(accountOf(input) ?? process.env.CASDOOR_ACCOUNT);
+      return gatewayMcpCall(
+        { ...(input as unknown as McpCallInput), account: a.address },
+        gatewaySigner(session, a),
+      );
     }
     case 'wallet_gateway_status':
       return gatewayStatus();
@@ -1367,18 +1535,21 @@ function tcpReachable(host: string, port: number, timeoutMs: number): Promise<bo
 // ─── state-root config seeding ────────────────────────────────────────────────
 
 /**
- * Seed wallet-cli's co-located config on first run only. The config (the
- * default-key pointer, user.address/pubkey) lives under the state root via the
- * pinned HOME, alongside the SSP keystore — so they survive a restart together
- * and cannot desync (P2). If the config already exists we NEVER touch it, which
- * preserves the default-key pointer across restarts. signer.url is pinned to
- * IPv4 loopback (SSP binds 127.0.0.1; `localhost` may resolve to ::1 in a
- * dual-stack container and refuse). This internal call intentionally bypasses
- * the tool-boundary config lock — the model never reaches it.
+ * Seed wallet-cli's co-located config on first run only. The config lives under
+ * the state root via the pinned HOME, alongside the SSP keystore, so both
+ * survive a restart together (P2). If the config already exists we do not
+ * re-seed it. signer.url is pinned to IPv4 loopback (SSP binds 127.0.0.1;
+ * `localhost` may resolve to ::1 in a dual-stack container and refuse). This
+ * internal call intentionally bypasses the tool-boundary config lock — the model
+ * never reaches it.
+ *
+ * The config no longer holds a default-key pointer: which account a command acts
+ * as is injected per child process (walletCliEnv). See clearDefaultKeyPointer
+ * for what happens to the pointer an older install left behind.
  */
 async function ensureWalletConfig(walletCli: WalletCliLauncher): Promise<void> {
   const cfgPath = path.join(walletHome(), '.wallet-cli', 'config.json');
-  if (existsSync(cfgPath)) return; // existing pointer — never clobber
+  if (existsSync(cfgPath)) return; // already seeded — never clobber
   try {
     await runQuery({ walletCli, args: ['config', 'init'], env: walletCliEnv() });
     await runQuery({
@@ -1404,7 +1575,19 @@ async function main(): Promise<void> {
   }
 
   const bins = await ensureBinaries(); // auto-install on startup if missing (logs to stderr)
-  await ensureWalletConfig(bins.walletCli!); // co-locate the default-key pointer (P2)
+  await ensureWalletConfig(bins.walletCli!); // co-locate wallet-cli's config (P2)
+
+  // One-shot: blank a default-key pointer left by an older install. It cannot
+  // route anything (the injected env wins over the file), but leaving it makes
+  // wallet_config_show claim a default account that does not exist.
+  const cleared = clearDefaultKeyPointer();
+  if (cleared) {
+    process.stderr.write(
+      `[${SERVER_NAME}] cleared the legacy default-key pointer from wallet-cli config ` +
+        `(user.address=${cleared.address ?? '""'}). This wallet has no default account: ` +
+        `each call names the account it acts as.\n`,
+    );
+  }
   const session = new SessionManager({
     bins: {
       signingServer: bins.signingServer!,

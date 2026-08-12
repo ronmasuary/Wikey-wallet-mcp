@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { TEST_ACCOUNT } from './fixtures/testAccount.js';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
@@ -98,7 +99,7 @@ test('no-KEK on hardware (marker on STDOUT) → retries once with env + SSP_KEK,
   const ctx = setup(port, { STUB_KEK_FAIL: 'stdout' });
   try {
     const { s, logs } = makeSession(port, ctx.dir);
-    const out = await s.signPrompted([], []);
+    const out = await s.signPrompted(TEST_ACCOUNT, [], []);
     assert.equal(out, '{"ok":true}');
 
     const sp = spawns(ctx);
@@ -123,7 +124,7 @@ test('no-KEK marker on STDERR also triggers the fallback (both streams scanned)'
   const ctx = setup(port, { STUB_KEK_FAIL: 'stderr' });
   try {
     const { s } = makeSession(port, ctx.dir);
-    assert.equal(await s.signPrompted([], []), '{"ok":true}');
+    assert.equal(await s.signPrompted(TEST_ACCOUNT, [], []), '{"ok":true}');
     const sp = spawns(ctx);
     assert.equal(sp.length, 2);
     assert.match(sp[1]!, /kek=env sspkek=set/);
@@ -139,7 +140,7 @@ test('a non-KEK boot failure does NOT trigger fallback and surfaces the output t
   const ctx = setup(port, { STUB_BOOT_FAIL: '1' });
   try {
     const { s } = makeSession(port, ctx.dir);
-    await assert.rejects(s.signPrompted([], []), /address already in use/);
+    await assert.rejects(s.signPrompted(TEST_ACCOUNT, [], []), /address already in use/);
     const sp = spawns(ctx);
     assert.equal(sp.length, 1, `non-KEK failure must not retry, got: ${sp.join(' | ')}`);
     assert.match(sp[0]!, /kek=auto/);
@@ -155,7 +156,7 @@ test('isDevEnv=true goes straight to software KEK (no hardware attempt)', async 
   const ctx = setup(port, { STUB_KEK_FAIL: 'stdout', isDevEnv: 'true' });
   try {
     const { s } = makeSession(port, ctx.dir);
-    assert.equal(await s.signPrompted([], []), '{"ok":true}');
+    assert.equal(await s.signPrompted(TEST_ACCOUNT, [], []), '{"ok":true}');
     const sp = spawns(ctx);
     assert.equal(sp.length, 1, `dev mode must spawn once (software), got: ${sp.join(' | ')}`);
     assert.match(sp[0]!, /kek=env sspkek=set/);

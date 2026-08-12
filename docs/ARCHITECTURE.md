@@ -268,7 +268,7 @@ graph TD
     HW -->|SSP STDOUT: no usable KEK provider| SW
     SW --> DEK[(dev.kek<br/>32-byte base64 SSP_KEK)]
     M[MCP doInit] -->|spawn -keystore-dir root/keystore + SSP_KEK| SSP[signing-server]
-    M -->|spawn HOME=root + --creator/--pubkey for signingKey| CLI[wallet-cli]
+    M -->|spawn HOME=root + WALLET_ADDRESS/WALLET_PUBKEY for account| CLI[wallet-cli]
     SSP --> KS[(root/keystore/*.enc<br/>key material)]
     CLI --> CFG[(root/.wallet-cli/config.json<br/>default pointer)]
     DEK --- ROOT[(root = WIKEY_SSP_DIR or ~/.ssp<br/>ONE volume)]
@@ -276,9 +276,12 @@ graph TD
     CFG --- ROOT
 ```
 
-A per-call `signingKey` on the signing tools resolves to `--creator/--pubkey`
-(via `keys get`), letting the agent sign with a chosen funded key when the
-default has drifted — without any wallet-cli change.
+A per-call `account` on every signing tool settles WHO the call acts as. There is
+no default key: with one key it is implicit, with several the call fails and the
+agent must ask the user (see `docs/REMOVE-DEFAULT-KEY.md`). One resolution feeds
+both routings — `WALLET_ADDRESS`/`WALLET_PUBKEY` in the child env (which reaches
+the commands that have no flags) and `--creator/--pubkey` on those that do — so
+the two can never name different keys. No wallet-cli change was needed.
 
 ## 8. Gateway (Casdoor) integration — REST vs MCP surfaces
 

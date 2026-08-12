@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { TEST_ACCOUNT } from './fixtures/testAccount.js';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
@@ -55,6 +56,44 @@ test('stateRoot/keystoreDir/walletHome all derive from WIKEY_SSP_DIR', () => {
   } finally {
     if (prev === undefined) delete process.env.WIKEY_SSP_DIR;
     else process.env.WIKEY_SSP_DIR = prev;
+  }
+});
+
+// ── unit: per-child account routing (replaces the config default key) ───────
+
+test('walletCliEnv injects WALLET_ADDRESS/WALLET_PUBKEY only when given an account', () => {
+  const bare = walletCliEnv();
+  assert.equal(bare.WALLET_ADDRESS, undefined);
+  assert.equal(bare.WALLET_PUBKEY, undefined);
+
+  const routed = walletCliEnv({ address: 'omnistar1acct', pubkey: 'UABC123==' });
+  assert.equal(routed.WALLET_ADDRESS, 'omnistar1acct');
+  assert.equal(routed.WALLET_PUBKEY, 'UABC123==');
+});
+
+test('walletCliEnv blanks the pubkey for a read-only account (signing must fail loudly)', () => {
+  const readOnly = walletCliEnv({ address: 'omnistar1acct' });
+  assert.equal(readOnly.WALLET_ADDRESS, 'omnistar1acct');
+  // wallet-cli's loader fills the missing half with '' anyway; being explicit
+  // means a signing command routed without a pubkey errors instead of picking
+  // up whatever the config file holds.
+  assert.equal(readOnly.WALLET_PUBKEY, '');
+});
+
+test('walletCliEnv drops inherited WALLET_* so the host env cannot be an ambient default key', () => {
+  const prevA = process.env.WALLET_ADDRESS;
+  const prevP = process.env.WALLET_PUBKEY;
+  try {
+    process.env.WALLET_ADDRESS = 'omnistar1operator';
+    process.env.WALLET_PUBKEY = 'OPERATOR==';
+    assert.equal(walletCliEnv().WALLET_ADDRESS, undefined, 'not inherited');
+    assert.equal(walletCliEnv().WALLET_PUBKEY, undefined, 'not inherited');
+    assert.equal(walletCliEnv({ address: 'omnistar1chosen' }).WALLET_ADDRESS, 'omnistar1chosen');
+  } finally {
+    if (prevA === undefined) delete process.env.WALLET_ADDRESS;
+    else process.env.WALLET_ADDRESS = prevA;
+    if (prevP === undefined) delete process.env.WALLET_PUBKEY;
+    else process.env.WALLET_PUBKEY = prevP;
   }
 });
 
@@ -124,7 +163,7 @@ test('doInit pins -keystore-dir <root>/keystore and HOME=<root>; wallet-cli inhe
       rotationMs: 60_000,
       log: () => {},
     });
-    assert.equal(await s.signPrompted([], []), '{"ok":true}');
+    assert.equal(await s.signPrompted(TEST_ACCOUNT, [], []), '{"ok":true}');
 
     const spawn0 = readFileSync(spawnLog, 'utf8').trim();
     assert.match(spawn0, new RegExp(`ksdir=${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/keystore`),
