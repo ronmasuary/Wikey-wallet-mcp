@@ -87,7 +87,7 @@ export function classifyAccount(p: AccountProbe): AccountStage {
 
 const CAPABILITIES = [
   'Inspect your safe: wallet_snapshot, wallet_profile, wallet_assets',
-  'Send assets out of a safe: wallet_tx_create_transaction',
+  'Send assets out of a safe: wallet_tx_create_transaction (check it first with wallet_tx_check — the network fee comes out of the same balance, so the full balance is never sendable; use its maxSuggested for "send everything")',
   'Add or remove users on a safe: wallet_tx_create_user / wallet_tx_delete_user',
   'Create or edit governance policies: wallet_tx_create_policy / wallet_tx_edit_policy',
   'View recovery helpers + threshold: wallet_recovery_helpers (read this first — helpers are the policy allowed_source; threshold is a % of the total helper count). Edit them: wallet_tx_edit_helpers',

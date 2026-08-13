@@ -58,6 +58,12 @@ import {
   onboardSponsor,
   buildRecoveryDeeplink,
   parseRecoveryDeeplink,
+  checkFeasibility,
+  checkBankSend,
+  parseAssets,
+  parseDenomAmount,
+  parseBalanceAmount,
+  toSmallest,
   saveRecoveryRequest,
   loadRecoveryRequest,
   clearRecoveryRequest,
@@ -417,32 +423,61 @@ const tools = [
   },
   {
     name: 'wallet_tx_send',
-    description: 'Send OST directly between key addresses (not safe funds). Use for gas funding.',
+    description:
+      "Send OST directly between key addresses (not safe funds). Use for gas funding. The gas for this transaction is paid in the OST being sent, so the sender's full balance is never sendable — this tool refuses a send that would drain the address.",
     inputSchema: {
       type: 'object',
       properties: {
         from: { type: 'string', description: 'Sender omnistar1... address' },
         to: { type: 'string', description: 'Recipient omnistar1... address' },
-        amount: { type: 'string', description: 'Amount with denom (e.g. 1000nost)' },
+        amount: { type: 'string', description: 'Amount with denom (e.g. 1000nost). Never the sender\'s whole balance — gas comes out of it.' },
+        acknowledgeRisk: {
+          type: 'boolean',
+          description: "Force a send flagged 'at-risk' (too little left for gas). Does not override a drain, which cannot settle.",
+        },
       },
       required: ['from', 'to', 'amount'],
     },
   },
   {
+    name: 'wallet_tx_check',
+    description:
+      "Will this transfer succeed? Read-only pre-flight for wallet_tx_create_transaction — call it BEFORE sending, and ALWAYS when the user says \"all\", \"everything\", \"the whole balance\", or \"max\". Returns { verdict, reason, balance, requested, remaining, maxSuggested }. verdict is 'will-fail' (structural — proven from balances, e.g. the amount exceeds the balance, it drains a fee-bearing asset to zero, or a token has no native gas coin to pay with), 'at-risk' (too little left over to cover a fee), or 'likely-pass'. USE maxSuggested AS THE AMOUNT for a send-everything request: the network fee is deducted from the same balance, so the full balance is never sendable and maxSuggested is the largest amount that clears. It is deliberately conservative, not an exact fee — the real fee is computed by the signing engine and is not visible here. Never signs, never brings up the secure session.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        destination: { type: 'string', description: 'Safe address the assets leave from (omnistar1...)' },
+        asset: { type: 'string', description: 'Asset symbol (e.g. BTC, USDC, OST)' },
+        amount: {
+          type: ['number', 'string'],
+          description:
+            'Amount in SMALLEST units (display value × smallCoin). Pass a STRING for large values — wei-scale amounts lose precision as a JSON number. Omit to just ask for maxSuggested.',
+        },
+        account: ACCOUNT_PROP,
+      },
+      required: ['destination', 'asset'],
+    },
+  },
+  {
     name: 'wallet_tx_create_transaction',
     description:
-      'Move assets out of a safe. Use this (not wallet_tx_send) when the safe holds the funds. amount must be in SMALLEST units (display value × smallCoin from wallet_assets).',
+      "Move assets out of a safe. Use this (not wallet_tx_send) when the safe holds the funds. amount must be in SMALLEST units (display value × smallCoin from wallet_assets). THE NETWORK FEE IS DEDUCTED FROM THE SAME BALANCE, so the full balance is NEVER sendable — a request to send \"all\" or \"everything\" must use maxSuggested from wallet_tx_check, not the raw balance from wallet_assets. This tool runs that check itself and REFUSES a transfer it can prove will fail; a borderline one is refused too and can be forced with acknowledgeRisk.",
     inputSchema: {
       type: 'object',
       properties: {
         destination: { type: 'string', description: 'Safe address (omnistar1...)' },
         to: { type: 'string', description: 'Recipient address' },
-        amount: { type: 'number', description: 'Amount in smallest units (display value × smallCoin)' },
+        amount: { type: 'number', description: 'Amount in smallest units (display value × smallCoin). Never the full balance of a fee-bearing asset — see wallet_tx_check.' },
         asset: { type: 'string', description: 'Asset symbol (e.g. BTC, USDC, OST)' },
         feePriority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Transaction fee priority' },
         tokenAddress: { type: 'string', description: 'ERC20 contract address (0x + 40 hex) — required for ERC20 assets' },
         chain: { type: 'string', enum: ['ethereum', 'polygon', 'base'], description: 'ERC20 chain — required for ERC20 assets' },
         smallCoin: { type: 'number', description: 'ERC20 token divisor — required for ERC20 assets' },
+        acknowledgeRisk: {
+          type: 'boolean',
+          description:
+            "Force a transfer wallet_tx_check rated 'at-risk' (too little left over to cover the fee). Only set this after telling the user it may fail and getting their go-ahead. It does NOT override a 'will-fail' verdict — those are structural and cannot settle at any fee.",
+        },
         account: ACCOUNT_PROP,
       },
       required: ['destination', 'to', 'amount', 'asset', 'feePriority'],
@@ -905,6 +940,50 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     }
   };
 
+  // Will a transfer settle? Reads the SAME `query assets` the wallet_assets tool
+  // returns — no new endpoint, no credentials, no session bring-up, so the check
+  // stays a free read and can be a precondition on the signing path without
+  // making signing slower to reach.
+  //
+  // It never estimates a fee: the fee that settles a transfer is computed by the
+  // signing engine, and the one number reachable from here (`fee_rate`) is masked
+  // and means a different thing on every chain. See core/txFeasibility.ts.
+  const feasibility = async (i: Record<string, unknown>, amount: bigint) => {
+    const address = await resolveAccountAddress(query, listKeystoreAddresses, accountOf(i));
+    const raw = await queryAs({ address }, ['query', 'assets']);
+    return checkFeasibility({
+      safes: parseAssets(raw),
+      safe: String(i.destination ?? ''),
+      asset: String(i.asset ?? ''),
+      amount,
+    });
+  };
+
+  // Tool-arg amount → smallest units. Accepts a string so wei-scale values
+  // survive: as a JSON number anything past 2^53 has already lost digits by the
+  // time it reaches us, and a silently-rounded amount is money.
+  const amountArg = (v: unknown): bigint => {
+    if (typeof v === 'bigint') return v;
+    if (typeof v === 'string') {
+      const parsed = toSmallest(v.trim(), '1');
+      if (parsed === null) throw new Error(`amount "${v}" is not a number`);
+      return parsed;
+    }
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new Error(`amount "${String(v)}" is not a number`);
+    if (!Number.isInteger(n)) {
+      throw new Error(
+        `amount ${n} is not a whole number. Amounts are in SMALLEST units (display value × smallCoin from wallet_assets), which are always integers.`,
+      );
+    }
+    if (!Number.isSafeInteger(n)) {
+      throw new Error(
+        `amount ${n} exceeds JSON number precision and has already lost digits. Pass it as a STRING instead.`,
+      );
+    }
+    return BigInt(n);
+  };
+
   switch (name) {
     // ── orientation ──
     case 'wallet_getting_started':
@@ -1110,17 +1189,67 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // `send` has no --creator option (it derives creator from --from), so the
       // flags are pubkey-only.
       const a = await acct(input.from);
+
+      // Same drain guard as create-transaction, against `query balance` — a bank
+      // send's gas is the OST it is sending, so an exact-balance send cannot pay
+      // for itself. Skipped silently when the amount is not `<digits><denom>`:
+      // wallet-cli validates that itself, and a parse we do not understand must
+      // not become a refusal.
+      const parsedAmount = parseDenomAmount(String(input.amount));
+      if (parsedAmount) {
+        const balanceRaw = await query(['query', 'balance', '--address', a.address, '--denom', parsedAmount.denom]);
+        const balance = parseBalanceAmount(balanceRaw);
+        if (balance !== null) {
+          const verdict = checkBankSend({ address: a.address, balance, ...parsedAmount });
+          if (verdict.verdict === 'will-fail' || (verdict.verdict === 'at-risk' && input.acknowledgeRisk !== true)) {
+            throw new Error(
+              `Refusing to broadcast — ${verdict.verdict} (${verdict.rule}).\n${verdict.reason}\n` +
+                `Full check: ${JSON.stringify(verdict)}`,
+            );
+          }
+        }
+      }
+
       return session.signPrompted(
         a,
         ['tx', 'send', '--from', a.address, '--to', String(input.to), '--amount', String(input.amount), '--broadcast', ...signerArgsFor(a, { pubkeyOnly: true })],
         [],
       );
     }
+    case 'wallet_tx_check': {
+      // Amount is optional here: with none, report the ceiling for a
+      // send-everything request (asking 0 exercises the same ladder and leaves
+      // maxSuggested as the answer).
+      const amount = input.amount === undefined ? BigInt(0) : amountArg(input.amount);
+      return feasibility(input, amount);
+    }
     case 'wallet_tx_create_transaction': {
       const { destination, to, amount, asset, feePriority, tokenAddress, chain, smallCoin } = input as {
         destination: string; to: string; amount: number; asset: string; feePriority: string;
         tokenAddress?: string; chain?: string; smallCoin?: number;
       };
+
+      // PRECONDITION, not advice. The description already told the model the
+      // amount is in smallest units and it still passed the whole balance — a
+      // user saying "send everything" beats advisory text every time. So the
+      // check runs here and REFUSES, in the same shape as the no-default-account
+      // refusal: hand back the numbers needed to retry rather than guessing an
+      // amount on the user's behalf.
+      const verdict = await feasibility(input, amountArg(amount));
+      if (verdict.verdict === 'will-fail' || (verdict.verdict === 'at-risk' && input.acknowledgeRisk !== true)) {
+        const how =
+          verdict.verdict === 'at-risk'
+            ? `Retry with amount ${verdict.maxSuggested}, or pass acknowledgeRisk:true to send it anyway after telling the user it may fail.`
+            : verdict.maxSuggested && verdict.maxSuggested !== '0'
+              ? `Retry with amount ${verdict.maxSuggested}.`
+              : 'No amount of this asset can settle from this safe right now.';
+        throw new Error(
+          `Refusing to broadcast — wallet_tx_check says ${verdict.verdict} (${verdict.rule}).\n` +
+            `${verdict.reason}\n${how}\n` +
+            `Full check: ${JSON.stringify(verdict)}`,
+        );
+      }
+
       const args = [
         'tx', 'create-transaction',
         '--destination', destination,
