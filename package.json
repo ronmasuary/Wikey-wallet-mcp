@@ -7,8 +7,24 @@
   "author": "Wikey",
   "repository": {
     "type": "git",
-    "url": "https://gitlab.com/bit2safe/wikey-wallet-mcp.git"
+    "url": "git+https://gitlab.com/bit2safe/wikey-wallet-mcp.git"
   },
+  "homepage": "https://gitlab.com/bit2safe/wikey-wallet-mcp#readme",
+  "bugs": {
+    "url": "https://gitlab.com/bit2safe/wikey-wallet-mcp/-/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "wallet",
+    "wikey",
+    "omnistar",
+    "self-custody",
+    "signing",
+    "cosmos",
+    "agent",
+    "stdio"
+  ],
   "bin": {
     "wikey-wallet-mcp": "dist/mcp-server.js"
   },
@@ -26,6 +42,9 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepare": "tsc -p tsconfig.build.json",
@@ -35,11 +54,11 @@
   "dependencies": {
     "@cosmjs/crypto": "^0.39.0",
     "@cosmjs/encoding": "^0.39.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@types/node": "^22",
-    "typescript": "^5"
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
-    "tsx": "^4"
+    "@types/node": "^22",
+    "tsx": "^4",
+    "typescript": "^5"
   }
 }
