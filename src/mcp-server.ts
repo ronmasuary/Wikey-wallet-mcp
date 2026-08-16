@@ -59,6 +59,10 @@ import {
   buildRecoveryDeeplink,
   parseRecoveryDeeplink,
   checkFeasibility,
+  buildFeeChoice,
+  normalizeFeePriority,
+  feePriorityRefusal,
+  feePriorityInvalid,
   checkBankSend,
   parseAssets,
   parseDenomAmount,
@@ -120,6 +124,12 @@ THERE IS NO DEFAULT ACCOUNT. Anything that signs must be told which account to a
 as. With exactly one key that is automatic; with several, the tool REFUSES and you
 must ASK THE USER which account they mean — never pick for them. wallet_accounts
 lists the choices. Their answer goes in the "account" parameter on each call.
+
+FEE PRIORITY IS THE USER'S CHOICE TOO. A transfer is bid low, medium or high; if the
+user did not say (and set no standing default), wallet_tx_create_transaction REFUSES
+and hands back the three options with their target confirmation times — ask them,
+never default to medium. wallet_tx_check returns the same menu up front. It quotes no
+cost on purpose: the real fee is only known once the signer builds the transaction.
 
 WHENEVER the user asks "what can I do?", "what's next?", "help", "how do I start?",
 or seems unsure — call wallet_getting_started FIRST. It inspects live state, reports
@@ -442,7 +452,7 @@ const tools = [
   {
     name: 'wallet_tx_check',
     description:
-      "Will this transfer succeed? Read-only pre-flight for wallet_tx_create_transaction — call it BEFORE sending, and ALWAYS when the user says \"all\", \"everything\", \"the whole balance\", or \"max\". Returns { verdict, reason, balance, requested, remaining, maxSuggested }. verdict is 'will-fail' (structural — proven from balances, e.g. the amount exceeds the balance, it drains a fee-bearing asset to zero, or a token has no native gas coin to pay with), 'at-risk' (too little left over to cover a fee), or 'likely-pass'. USE maxSuggested AS THE AMOUNT for a send-everything request: the network fee is deducted from the same balance, so the full balance is never sendable and maxSuggested is the largest amount that clears. It is deliberately conservative, not an exact fee — the real fee is computed by the signing engine and is not visible here. Never signs, never brings up the secure session.",
+      "Will this transfer succeed? Read-only pre-flight for wallet_tx_create_transaction — call it BEFORE sending, and ALWAYS when the user says \"all\", \"everything\", \"the whole balance\", or \"max\". Returns { verdict, reason, balance, requested, remaining, maxSuggested, feeChoice }. feeChoice is the low/medium/high menu for this chain with a target confirmation time for each — PUT IT TO THE USER and pass their answer as feePriority; it quotes no cost on purpose (the real fee is only known when the signer builds the transaction, so any number here would be invented). verdict is 'will-fail' (structural — proven from balances, e.g. the amount exceeds the balance, it drains a fee-bearing asset to zero, or a token has no native gas coin to pay with), 'at-risk' (too little left over to cover a fee), or 'likely-pass'. USE maxSuggested AS THE AMOUNT for a send-everything request: the network fee is deducted from the same balance, so the full balance is never sendable and maxSuggested is the largest amount that clears. It is deliberately conservative, not an exact fee — the real fee is computed by the signing engine and is not visible here. Never signs, never brings up the secure session.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -461,7 +471,7 @@ const tools = [
   {
     name: 'wallet_tx_create_transaction',
     description:
-      "Move assets out of a safe. Use this (not wallet_tx_send) when the safe holds the funds. amount must be in SMALLEST units (display value × smallCoin from wallet_assets). THE NETWORK FEE IS DEDUCTED FROM THE SAME BALANCE, so the full balance is NEVER sendable — a request to send \"all\" or \"everything\" must use maxSuggested from wallet_tx_check, not the raw balance from wallet_assets. This tool runs that check itself and REFUSES a transfer it can prove will fail; a borderline one is refused too and can be forced with acknowledgeRisk.",
+      "Move assets out of a safe. Use this (not wallet_tx_send) when the safe holds the funds. amount must be in SMALLEST units (display value × smallCoin from wallet_assets). THE NETWORK FEE IS DEDUCTED FROM THE SAME BALANCE, so the full balance is NEVER sendable — a request to send \"all\" or \"everything\" must use maxSuggested from wallet_tx_check, not the raw balance from wallet_assets. This tool runs that check itself and REFUSES a transfer it can prove will fail; a borderline one is refused too and can be forced with acknowledgeRisk. It also refuses when feePriority is missing and the user has no saved default — fee priority is the user's call, and the refusal carries the options to ask them with.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -469,7 +479,12 @@ const tools = [
         to: { type: 'string', description: 'Recipient address' },
         amount: { type: 'number', description: 'Amount in smallest units (display value × smallCoin). Never the full balance of a fee-bearing asset — see wallet_tx_check.' },
         asset: { type: 'string', description: 'Asset symbol (e.g. BTC, USDC, OST)' },
-        feePriority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Transaction fee priority' },
+        feePriority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description:
+            "The USER's choice of fee priority, not yours. Omit it unless they said which they want (or implied it — \"urgent\", \"cheap\", \"no rush\"); the call then REFUSES and hands back the three options with their target confirmation times, which you put to the user. Never default it to medium to avoid asking. wallet_tx_check returns the same menu in `feeChoice` before you get here.",
+        },
         tokenAddress: { type: 'string', description: 'ERC20 contract address (0x + 40 hex) — required for ERC20 assets' },
         chain: { type: 'string', enum: ['ethereum', 'polygon', 'base'], description: 'ERC20 chain — required for ERC20 assets' },
         smallCoin: { type: 'number', description: 'ERC20 token divisor — required for ERC20 assets' },
@@ -480,7 +495,10 @@ const tools = [
         },
         account: ACCOUNT_PROP,
       },
-      required: ['destination', 'to', 'amount', 'asset', 'feePriority'],
+      // feePriority is deliberately NOT required: a required parameter does not
+      // produce a question, it produces a guess. The handler refuses instead and
+      // returns the menu — see core/feeChoice.ts.
+      required: ['destination', 'to', 'amount', 'asset'],
     },
   },
   {
@@ -959,6 +977,18 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     });
   };
 
+  // Read a config value via the wallet-cli read runner (reads are never locked).
+  // A missing key, a wedged read or junk JSON all answer '' — every caller here
+  // treats "no value" as "fall through to the explicit path", never as an error.
+  const cfgGet = async (key: string): Promise<string> => {
+    try {
+      const j = JSON.parse(await query(['config', 'get', key])) as { data?: { value?: string } };
+      return j?.data?.value ?? '';
+    } catch {
+      return '';
+    }
+  };
+
   // Tool-arg amount → smallest units. Accepts a string so wei-scale values
   // survive: as a JSON number anything past 2^53 has already lost digits by the
   // time it reaches us, and a silently-rounded amount is money.
@@ -1221,11 +1251,16 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // send-everything request (asking 0 exercises the same ladder and leaves
       // maxSuggested as the answer).
       const amount = input.amount === undefined ? BigInt(0) : amountArg(input.amount);
-      return feasibility(input, amount);
+      const verdict = await feasibility(input, amount);
+      // The fee menu rides along with the pre-flight the agent already has to
+      // call: same read, no extra round-trip, and it arrives at exactly the
+      // moment the choice has to be put to the user. Priced by the coin that
+      // actually pays — for a token that is its chain's gas coin, not the token.
+      return { ...verdict, feeChoice: buildFeeChoice(verdict.asset, verdict.gasAsset?.symbol) };
     }
     case 'wallet_tx_create_transaction': {
       const { destination, to, amount, asset, feePriority, tokenAddress, chain, smallCoin } = input as {
-        destination: string; to: string; amount: number; asset: string; feePriority: string;
+        destination: string; to: string; amount: number; asset: string; feePriority?: unknown;
         tokenAddress?: string; chain?: string; smallCoin?: number;
       };
 
@@ -1250,13 +1285,37 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
         );
       }
 
+      // SECOND precondition, same shape as the amount one and for the same
+      // reason. feePriority used to be `required` in the schema, which bought
+      // nothing: nothing validates the schema at this boundary, so a missing
+      // value reached spawn() as `undefined` and died on ERR_INVALID_ARG_TYPE —
+      // and a model that must fill a field simply writes "medium", spending the
+      // user's money on a tier they were never shown. So: the user's explicit
+      // answer wins, a standing default they set themselves is honoured, and
+      // otherwise we refuse WITH the menu instead of picking. See core/feeChoice.ts.
+      const said = feePriority === undefined || feePriority === null || String(feePriority).trim() === ''
+        ? null
+        : feePriority;
+      const given = said === null ? null : normalizeFeePriority(said);
+      // Something WAS passed and it is not one of the three: name it rather than
+      // falling through to a default, which would send at a tier nobody chose.
+      if (said !== null && given === null) throw new Error(feePriorityInvalid(said));
+      // Only read config when the call did not say — one wallet-cli read, and
+      // only on the path that needs it.
+      const priority = given ?? normalizeFeePriority(await cfgGet('feePriority'));
+      if (!priority) {
+        throw new Error(
+          feePriorityRefusal(buildFeeChoice(verdict.asset || asset, verdict.gasAsset?.symbol), verdict.asset || asset),
+        );
+      }
+
       const args = [
         'tx', 'create-transaction',
         '--destination', destination,
         '--to', to,
         '--amount', amount.toString(),
         '--asset', asset,
-        '--fee-priority', feePriority,
+        '--fee-priority', priority,
       ];
       if (tokenAddress) args.push('--token-address', tokenAddress);
       if (chain) args.push('--chain', chain);
@@ -1465,15 +1524,6 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       const { addHelpers = [], removeHelpers = [], threshold } = input as { addHelpers?: string[]; removeHelpers?: string[]; threshold: number };
       const a = await acct(accountOf(input));
 
-      // Read a config value via the wallet-cli read runner (reads are never locked).
-      const cfgGet = async (key: string): Promise<string> => {
-        try {
-          const j = JSON.parse(await query(['config', 'get', key])) as { data?: { value?: string } };
-          return j?.data?.value ?? '';
-        } catch {
-          return '';
-        }
-      };
       // The account whose helpers we're editing IS the signer.
       const creator = a.address;
 

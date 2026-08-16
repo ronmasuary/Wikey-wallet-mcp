@@ -16,13 +16,28 @@ quickly.
 
 ---
 
-## Why an MCP server (not a skill)
+## Why an MCP server
 
-The previous artifact was a ragent-shaped *skill* that only loaded in ragent
-hosts behind an unenforceable `SKILL.md`. This is an **MCP stdio server**: a
-typed tool boundary that runs in every MCP host and that the model **cannot**
-talk around. The verified core logic is ported from that skill; the MCP wrapper
-is the product.
+Agent capabilities are often shipped as *instructions* — a markdown file telling
+the model how to behave. Instructions are advice. A model that is confused,
+jailbroken, or prompt-injected can simply not follow them, and nothing in the
+system stops it.
+
+That is not a good enough boundary for a wallet. This ships as an **MCP stdio
+server**, so the capability is enforced by the process rather than described in a
+document:
+
+- The model can only invoke the **declared tools**, with arguments that satisfy
+  their schemas. There is no free-form escape hatch.
+- **The model never signs anything itself.** It calls a tool; the server holds the
+  sealed HMAC session key and drives the signing stack. A `wallet-cli` run from
+  outside this server cannot obtain a valid proof — see the confused-deputy note
+  below.
+- **Security-critical configuration is locked server-side,** so the model cannot
+  talk its way into repointing the signer or the keystore.
+
+The same boundary works on any MCP host — Claude Desktop, IDE extensions, custom
+clients — with no Wikey-specific code in the host.
 
 ## Threat model (one line)
 
@@ -36,7 +51,14 @@ the model only ever sees small, complete derived data. Full detail in
 
 ## Install / host wiring
 
-The server is published to npm as `wikey-wallet-mcp` and launched over stdio.
+The server is published to npm as
+[`wikey-wallet-mcp`](https://www.npmjs.com/package/wikey-wallet-mcp) and launched
+over stdio:
+
+```bash
+npm i -g wikey-wallet-mcp
+```
+
 Add it to your MCP host config (generic `mcp.json`-style):
 
 ```json
@@ -67,7 +89,7 @@ knowledge.**
 
 | Flag | Type | Effect |
 | ---- | ---- | ------ |
-| `WIKEY_SSP_DIR` | path | **The single persistence knob (operator, not agent).** The one state root holding the SSP keystore, the software KEK (`dev.kek`), the child binaries, and wallet-cli's config (the default-key pointer). Default `~/.ssp`. Mount **one volume** here and the wallet stack is restart-stable; the keystore and the "which key is default" pointer co-locate and cannot desync. |
+| `WIKEY_SSP_DIR` | path | **The single persistence knob (operator, not agent).** The one state root holding the SSP keystore, the software KEK (`dev.kek`), the child binaries, and wallet-cli's config. Default `~/.ssp`. Mount **one volume** here and the wallet stack is restart-stable. If the machine already has a `~/.ssp` from another wallet tool or a treasury setup, point this MCP at a separate root (e.g. `~/.ssp-mcp`) so the two keystores cannot collide. |
 | `isDevEnv` | `"true"` / `"1"` | **Force software KEK** persisted to `<root>/dev.kek` (generated on first use, reused across restarts). **Unset / false → prod:** hardware-preferred KEK (`-kek-provider auto`); if no hardware enclave is present, the MCP **auto-falls-back once** to the persisted software KEK so keys still survive a restart (logged + shown in `doctor`/`session_status`). The KEK never reaches the model either way. |
 | `installationScriptPath` | path | Explicit local path to `install-child-mode.cjs`. |
 | `installationScriptUrl` | URL | Download location for the install script, used only when no local script is found. |
@@ -138,19 +160,23 @@ script was found.
 
 ---
 
-## Tool surface (33 tools)
+## Tool surface (46 tools)
 
-Skill-compatible: the full skill surface **minus** `wallet_session_start` (the
-session now starts lazily on the first signing call) and `wallet_hmac_rotate`
-(rotation is automatic). Read-only `wallet_session_status` is kept, the
-self-heal `wallet_session_recover` is added, and three B2 snapshot tools are
+There is **no** `wallet_session_start` (the session starts lazily on the first
+signing call) and no `wallet_hmac_rotate` (rotation is automatic). Read-only
+`wallet_session_status` is kept and the self-heal `wallet_session_recover` is
 added.
 
+- **Orientation:** `wallet_getting_started` (inspects live state and returns the
+  exact next action — call this first when the user is unsure),
+  `wallet_accounts` (every local key with its on-chain name, funding and safes).
 - **Reads** (no SSP, no key): `wallet_chain_info`, `wallet_balance`,
-  `wallet_balances`, `wallet_account`, `wallet_profile`, `wallet_assets`.
+  `wallet_balances`, `wallet_account`, `wallet_profile`, `wallet_assets`,
+  `wallet_resolve_name`, `wallet_recovery_helpers`, `wallet_tx_check`.
 - **Snapshot store (B2):** `wallet_snapshot` (returns a small **index only** —
   never raw JSON), `wallet_snapshot_query` (byte-budgeted, explicitly paged),
-  `wallet_snapshot_page`.
+  `wallet_snapshot_page`, `wallet_snapshot_object` (one object in full, with
+  `fields` narrowing to recover anything the byte budget dropped).
 - **Keys:** `wallet_keys_list`, `wallet_keys_get`, `wallet_keys_create`.
 - **Config:** `wallet_config_show`, `wallet_config_get`, `wallet_config_set`
   (security-critical keys **locked**), `wallet_config_init`,
@@ -163,10 +189,28 @@ added.
   `wallet_tx_create_policy`, `wallet_tx_edit_policy`, `wallet_tx_delete_policy`,
   `wallet_tx_create_user`, `wallet_tx_delete_user`, `wallet_tx_edit_helpers`,
   `wallet_notification_configure`.
+- **Gateway** (passkey-authorized calls to third-party APIs and MCP servers):
+  `wallet_gateway_register`, `wallet_gateway_login`, `wallet_gateway_logout`,
+  `wallet_gateway_status`, `wallet_gateway_api_call`, `wallet_gateway_mcp_call`.
+- **Onboarding:** `wallet_onboard_sponsor` (sponsored invite → funded key → safe
+  → optional passkey enrollment, resumable on the same key).
 
 Per-tool operational guidance (smallCoin math, the policy `applyOn` mixing rule,
 "a successful broadcast is **not** a completed deletion → re-query `isDeleted`",
 token-credential handling) is carried in the tool descriptions.
+
+### There is no default account
+
+Anything that signs must be told **which account** to act as. With exactly one
+key on the machine that is inferred; with several, the tool **refuses and returns
+the key list** rather than picking for you — the caller passes `account` (address
+or on-chain name) explicitly. `wallet_accounts` enumerates the choices.
+
+Earlier versions followed a default-key pointer in the wallet-cli config that
+named whichever key was created last, so minting a key could silently redirect
+later signing to the wrong account. That pointer is gone; if an older install
+left one behind it is blanked once on first start (noted on stderr), and nothing
+else in the config is touched.
 
 ---
 
