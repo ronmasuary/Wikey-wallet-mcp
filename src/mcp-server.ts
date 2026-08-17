@@ -64,7 +64,8 @@ import {
   feePriorityRefusal,
   feePriorityInvalid,
   checkBankSend,
-  parseAssets,
+  fetchSafeAssets,
+  fetchPortfolio,
   parseDenomAmount,
   parseBalanceAmount,
   toSmallest,
@@ -887,17 +888,24 @@ function parseFields(v: unknown): FieldSelector | undefined {
   return undefined;
 }
 
+// Says what a partial portfolio means, so the agent reports it instead of
+// telling the user those assets are gone or empty.
+const UNAVAILABLE_NOTE =
+  'These assets could not be priced in time and are MISSING from the list above — ' +
+  'that is not the same as a zero balance. Every other asset is accurate. ' +
+  'Retrying usually resolves it; a transfer of an unlisted asset will still pre-flight correctly.';
+
 async function dispatch(deps: Deps, name: string, input: Record<string, unknown>): Promise<unknown> {
   const { session, cache, walletCli } = deps;
   // Every wallet-cli read runs with HOME pinned to the state root so it reads the
   // SAME co-located config (default-key pointer) the signing paths write (P2).
   const query = (args: string[]) => runQuery({ walletCli, args, env: walletCliEnv() });
-  // Same read runner, but acting AS a specific account: the address is injected
-  // into the child's env (WALLET_ADDRESS/WALLET_PUBKEY) instead of relying on a
-  // config pointer. This is the only way to target commands wallet-cli gives no
-  // --address flag (e.g. `query assets`).
-  const queryAs = (account: AccountEnv, args: string[]) =>
-    runQuery({ walletCli, args, env: walletCliEnv(account) });
+  // (There was a `queryAs` here that injected WALLET_ADDRESS into the child env
+  // to target commands wallet-cli gives no --address flag. Its only caller was
+  // `query assets`, which now reads the pricing endpoint directly — see
+  // core/assetInfo.ts. walletCliEnv(account) still does the env injection for
+  // the paths that need it, e.g. resolveName below.)
+  //
   // Settle WHO a call acts as. There is no default key: this returns the only
   // key when there is one, the named one when the caller chose, and otherwise
   // throws with the account list so the agent can ask the user.
@@ -958,21 +966,29 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     }
   };
 
-  // Will a transfer settle? Reads the SAME `query assets` the wallet_assets tool
-  // returns — no new endpoint, no credentials, no session bring-up, so the check
-  // stays a free read and can be a precondition on the signing path without
-  // making signing slower to reach.
+  // Will a transfer settle? Reads the same priced asset rows wallet_assets
+  // returns — no credentials beyond the config's own api-key, no session
+  // bring-up, so the check stays a free read and can be a precondition on the
+  // signing path without making signing slower to reach.
+  //
+  // NARROWED to the asset being sent. It does NOT shell out to `query assets`:
+  // that command asks the pricing endpoint for the safe's ENTIRE asset list in
+  // one request, the endpoint prices serially, and wallet-cli aborts at a
+  // hardcoded 10s — so on a safe holding a slow asset (MATIC/POL took 17-22s
+  // each on 2026-08-17) EVERY transfer failed with API_TIMEOUT before it could
+  // reach the signer, whatever was being sent. Pricing just the sent asset
+  // (plus its gas coin, for a token) is a sub-second read. See core/assetInfo.ts.
   //
   // It never estimates a fee: the fee that settles a transfer is computed by the
   // signing engine, and the one number reachable from here (`fee_rate`) is masked
   // and means a different thing on every chain. See core/txFeasibility.ts.
   const feasibility = async (i: Record<string, unknown>, amount: bigint) => {
     const address = await resolveAccountAddress(query, listKeystoreAddresses, accountOf(i));
-    const raw = await queryAs({ address }, ['query', 'assets']);
+    const asset = String(i.asset ?? '');
     return checkFeasibility({
-      safes: parseAssets(raw),
+      safes: await fetchSafeAssets(await assetDeps(), address, [asset]),
       safe: String(i.destination ?? ''),
-      asset: String(i.asset ?? ''),
+      asset,
       amount,
     });
   };
@@ -987,6 +1003,35 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     } catch {
       return '';
     }
+  };
+
+  // Endpoints + credential for the direct asset reads, straight from the SAME
+  // wallet-cli config every other path uses — so a re-pointed environment (a
+  // testnet proxy, a rotated api-key) moves these reads with it and there is no
+  // second place to keep in sync. Read-only: `config get` is never locked.
+  //
+  // Missing values are an error, not a default. A hardcoded fallback URL would
+  // silently price a testnet safe against mainnet.
+  const assetDeps = async () => {
+    const [snapshotUrl, apiServerUrl, apiKey] = await Promise.all([
+      cfgGet('snapshotUrl'),
+      cfgGet('apiServerUrl'),
+      cfgGet('apiKey'),
+    ]);
+    const missing = [
+      ['snapshotUrl', snapshotUrl],
+      ['apiServerUrl', apiServerUrl],
+      ['apiKey', apiKey],
+    ]
+      .filter(([, v]) => !v)
+      .map(([k]) => k);
+    if (missing.length) {
+      throw new Error(
+        `Cannot read asset prices: wallet-cli config is missing ${missing.join(', ')}. ` +
+          `Run wallet_config_show to inspect it.`,
+      );
+    }
+    return { snapshotUrl, apiServerUrl, apiKey };
   };
 
   // Tool-arg amount → smallest units. Accepts a string so wei-scale values
@@ -1041,12 +1086,25 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       return query(args);
     }
     case 'wallet_assets': {
-      // `query assets` has NO --address flag — it reads config.user.address —
-      // so the account is routed through the child env. (The previous code
-      // pushed --address, which commander rejects outright: wallet_assets was
-      // usable ONLY against the default key.)
+      // Reads the pricing endpoint directly rather than via `query assets`.
+      // Same envelope, same rows — but ONE REQUEST PER ASSET (throttled)
+      // instead of the CLI's single all-assets request, which the endpoint
+      // prices serially: 52s on an 11-asset safe, against wallet-cli's
+      // hardcoded 10s abort. See core/assetInfo.ts for the measurements.
+      //
+      // `unavailable` rides along when an asset could not be priced. It is
+      // reported rather than thrown BECAUSE this is a display read — one slow
+      // asset must not cost the user the other ten — and reported rather than
+      // omitted so a missing row is never mistaken for a zero balance.
       const address = await resolveAccountAddress(query, listKeystoreAddresses, accountOf(input));
-      return queryAs({ address }, ['query', 'assets']);
+      const { safes, unavailable } = await fetchPortfolio(await assetDeps(), address);
+      return {
+        success: true,
+        data: {
+          assets: safes,
+          ...(unavailable.length ? { unavailable, note: UNAVAILABLE_NOTE } : {}),
+        },
+      };
     }
     case 'wallet_accounts':
       return listAccounts(query, listKeystoreAddresses);

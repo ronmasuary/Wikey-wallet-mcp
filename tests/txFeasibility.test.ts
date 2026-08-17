@@ -253,3 +253,61 @@ test('parseBalanceAmount reads query balance output', () => {
   );
   assert.equal(parseBalanceAmount('nope'), null);
 });
+
+// ─── Narrowed reads (core/assetInfo.ts) ─────────────────────────────────────
+
+test('R1 names the safe\'s real holdings even when the read was narrowed', () => {
+  // Under narrowing `assets` holds only what was asked for, so without
+  // heldSymbols this told a user with a full safe that it holds "(nothing)".
+  const r = checkFeasibility({
+    safes: [{ safeAddress: SAFE, assets: [], heldSymbols: ['BTC', 'ETH', 'XRP'] }],
+    safe: SAFE,
+    asset: 'OST',
+    amount: BigInt(1),
+  });
+  assert.equal(r.verdict, 'will-fail');
+  assert.equal(r.rule, 'R1-not-held');
+  assert.match(r.reason, /BTC, ETH, XRP/);
+  assert.doesNotMatch(r.reason, /\(nothing\)/);
+});
+
+test('R1 still falls back to assets[] on the wallet-cli envelope (no heldSymbols)', () => {
+  const r = checkFeasibility({
+    safes: [{ safeAddress: SAFE, assets: [{ symbol: 'BTC', value: '1', smallCoin: '100000000' }] }],
+    safe: SAFE,
+    asset: 'OST',
+    amount: BigInt(1),
+  });
+  assert.equal(r.rule, 'R1-not-held');
+  assert.match(r.reason, /BTC/);
+});
+
+test('a narrowed read still reaches every non-R1 rule (BTC path unchanged)', () => {
+  // The ladder only ever needed the sent asset's row plus, for a token, its gas
+  // coin. Narrowing must not change any verdict for a plain native transfer.
+  const narrowed: SafeAssets[] = [
+    {
+      safeAddress: SAFE,
+      assets: [{ symbol: 'BTC', value: '0.5', smallCoin: '100000000', priceValue: '60000' }],
+      heldSymbols: ['BTC', 'ETH', 'MATIC', 'POL'],
+    },
+  ];
+  const full: SafeAssets[] = [
+    {
+      safeAddress: SAFE,
+      assets: [
+        { symbol: 'BTC', value: '0.5', smallCoin: '100000000', priceValue: '60000' },
+        { symbol: 'ETH', value: '2', smallCoin: '1000000000', priceValue: '1900' },
+        { symbol: 'POL', value: '5', smallCoin: '1000000000', priceValue: '0.4' },
+      ],
+    },
+  ];
+
+  for (const amount of [BigInt(1), BigInt(10_000_000), BigInt(50_000_000), BigInt(60_000_000)]) {
+    const a = checkFeasibility({ safes: narrowed, safe: SAFE, asset: 'BTC', amount });
+    const b = checkFeasibility({ safes: full, safe: SAFE, asset: 'BTC', amount });
+    assert.equal(a.verdict, b.verdict, `verdict matches at ${amount}`);
+    assert.equal(a.rule, b.rule, `rule matches at ${amount}`);
+    assert.equal(a.maxSuggested, b.maxSuggested, `maxSuggested matches at ${amount}`);
+  }
+});

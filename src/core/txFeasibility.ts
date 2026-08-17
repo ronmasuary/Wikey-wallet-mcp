@@ -53,6 +53,17 @@ export interface AssetInfo {
 export interface SafeAssets {
   safeAddress: string;
   assets: AssetInfo[];
+  /**
+   * Every symbol the safe holds, INCLUDING any not priced in `assets`.
+   *
+   * Exists because a narrowed read (core/assetInfo.ts) prices only the asset
+   * being sent, so `assets` is no longer the safe's inventory. R1 reports what
+   * the safe holds when the requested asset is missing; without this it would
+   * read "(nothing)" off a one-element list and tell the user a full safe is
+   * empty. Optional: absent on the wallet-cli envelope, where `assets` IS the
+   * full inventory.
+   */
+  heldSymbols?: string[];
 }
 
 export interface FeasibilityInput {
@@ -203,7 +214,14 @@ function findSafe(safes: SafeAssets[], safe: string): SafeAssets | undefined {
   return safes.find((s) => (s.safeAddress ?? '').trim().toLowerCase() === want);
 }
 
-function findAsset(assets: AssetInfo[], symbol: string): AssetInfo | undefined {
+/**
+ * Symbol → the row that represents it, alias-aware in both directions (asked for
+ * MATIC, safe reports POL, and vice versa). Exported because the narrowed asset
+ * fetch in assetInfo.ts must pick the SAME row this ladder will later look up —
+ * if the two disagreed, a narrowed read could omit the very asset being sent and
+ * the ladder would call it not-held.
+ */
+export function findAsset(assets: AssetInfo[], symbol: string): AssetInfo | undefined {
   const want = symbol.trim().toUpperCase();
   const direct = assets.find((a) => (a.symbol ?? '').trim().toUpperCase() === want);
   if (direct) return direct;
@@ -220,8 +238,13 @@ function findAsset(assets: AssetInfo[], symbol: string): AssetInfo | undefined {
   return undefined;
 }
 
-/** Is this a token whose fee is paid in a DIFFERENT coin? */
-function gasSymbolFor(asset: AssetInfo): string | null {
+/**
+ * Is this a token whose fee is paid in a DIFFERENT coin? Exported so a narrowed
+ * fetch can tell whether it still owes a second request for the gas coin: R4
+ * reads the gas balance, so narrowing to the sent asset ALONE would silently
+ * drop the no-gas check.
+ */
+export function gasSymbolFor(asset: AssetInfo): string | null {
   const l2 = asset.layer2data;
   if (!l2 || !l2.contractAddress) return null;
   const chain = (l2.chain ?? '').trim().toUpperCase();
@@ -263,7 +286,9 @@ export function checkFeasibility(input: FeasibilityInput): Feasibility {
 
   // ── R1: the safe does not hold this asset at all ──
   if (!safeRow || !asset) {
-    const held = (safeRow?.assets ?? []).map((a) => a.symbol).filter(Boolean);
+    // Prefer the full inventory: under a narrowed read `assets` is only what was
+    // asked for, so reading the held list off it would report "(nothing)".
+    const held = (safeRow?.heldSymbols ?? (safeRow?.assets ?? []).map((a) => a.symbol)).filter(Boolean);
     return {
       ...base,
       verdict: 'will-fail',
