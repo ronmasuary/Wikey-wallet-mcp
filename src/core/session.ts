@@ -63,8 +63,10 @@ export interface SessionStatus {
   state: 'no-session' | 'active' | 'wedged';
   /** The KEK provider the live SSP child actually came up with (never the key). */
   kekProvider: 'auto' | 'env' | null;
-  /** True when software KEK was reached via runtime fallback (no hardware). */
+  /** True when software KEK was reached via fallback (preflight or runtime), not isDevEnv. */
   kekFallback: boolean;
+  /** Why a non-default KEK provider was chosen (e.g. an unusable macOS Keychain); else null. */
+  kekReason: string | null;
   /**
    * Why the session is wedged, if it is — a short, secret-redacted label
    * (e.g. "signing-server exited (code=3, signal=null)" or "rotation failed: …").
@@ -131,6 +133,7 @@ export class SessionManager {
   private lastRotation: number | null = null;
   private effectiveKekProvider: 'auto' | 'env' | null = null;
   private kekFellBack = false;
+  private kekReason: string | null = null;
   /** Bounded ring (~2 KB) of the LIVE child's recent stdout+stderr, for the exit tail. */
   private liveTail = '';
   /** Diagnostics captured the last time the child died unexpectedly. */
@@ -179,7 +182,12 @@ export class SessionManager {
 
     const key = mintKey();
     let kek = resolveKekPolicy();
-    let fellBack = false;
+    // resolveKekPolicy can already hand back the software KEK without us ever
+    // spawning — the macOS keychain preflight. That is a fallback too (it was
+    // not asked for via isDevEnv), so report it as one rather than letting
+    // session_status read like a hardware-backed session.
+    let fellBack = kek.provider === 'env' && !isDevEnv();
+    if (kek.reason) this.log(`[wikey-wallet-mcp] KEK: ${kek.reason}; using persisted software KEK (dev.kek).`);
 
     let proc: ChildProcess;
     try {
@@ -233,6 +241,7 @@ export class SessionManager {
     this.key = key;
     this.effectiveKekProvider = kek.provider;
     this.kekFellBack = fellBack;
+    this.kekReason = kek.reason ?? null;
     this.startRotationTimer();
     this.log(
       `[wikey-wallet-mcp] SSP session started (pid ${proc.pid}, kek=${kek.provider}` +
@@ -511,6 +520,7 @@ export class SessionManager {
       state: this.wedged ? 'wedged' : active ? 'active' : 'no-session',
       kekProvider: active ? this.effectiveKekProvider : null,
       kekFallback: active ? this.kekFellBack : false,
+      kekReason: active ? this.kekReason : null,
       wedgedReason: this.wedged ? this.wedgedReason : null,
       lastChildExit: this.lastChildExit,
     };
@@ -547,6 +557,7 @@ export class SessionManager {
     this.lastRotation = null;
     this.effectiveKekProvider = null;
     this.kekFellBack = false;
+    this.kekReason = null;
     this.wedged = false;
     this.wedgedReason = null; // no longer wedged; keep lastChildExit as history
     this.log('[wikey-wallet-mcp] session recovered — will cold-start on next signing call.');

@@ -28,6 +28,7 @@ import {
   ensureBinaries,
   resolveBins,
   resolveKekPolicy,
+  macKeychainUsable,
   isDevEnv,
   locateInstallScript,
   runQuery,
@@ -1657,11 +1658,16 @@ async function doctor(): Promise<number> {
   const kek = resolveKekPolicy();
   out(`dev env        : ${isDevEnv() ? 'true (isDevEnv set)' : 'false'}`);
   if (kek.provider === 'env') {
-    out('KEK provider   : env (persisted software KEK — forced via isDevEnv)');
+    out(
+      kek.reason
+        ? `KEK provider   : env (persisted software KEK — ${kek.reason})`
+        : 'KEK provider   : env (persisted software KEK — forced via isDevEnv)',
+    );
   } else {
     // doctor runs without spawning SSP, so it can only predict; the actual
     // provider is settled at first session bring-up (see session_status).
     out('KEK provider   : auto (hardware-preferred)');
+    if (process.platform === 'darwin') out(`               : ${macKeychainUsable().reason}`);
     out('               : will fall back to persisted software KEK if no hardware enclave is present');
   }
 

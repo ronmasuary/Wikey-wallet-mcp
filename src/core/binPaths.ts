@@ -277,6 +277,8 @@ export function isDevEnv(): boolean {
 export interface KekPolicy {
   /** 'auto' = hardware-preferred; 'env' = persisted software fallback. */
   provider: 'auto' | 'env';
+  /** Why this provider was chosen, when it wasn't the plain default (operator-facing). */
+  reason?: string;
   /** kek-related flags to append to the signing-server argv. */
   flags: string[];
   /** extra env to inject at spawn (SSP_KEK when on the env fallback). */
@@ -338,12 +340,121 @@ export function softwareKekPolicy(): KekPolicy {
   };
 }
 
+// ─── macOS Keychain preflight ────────────────────────────────────────────────
+//
+// On darwin `-kek-provider auto` ALWAYS lands on the Keychain provider: its
+// Available() is a hardcoded `true` (kek/keychain_darwin.go), and the KEK is
+// fetched LAZILY — inside the encrypted backend's Save/Load, not at boot. So a
+// Mac whose security session has no usable default keychain (login.keychain-db
+// missing/unset, or the agent launched over ssh / sudo / launchd) brings up a
+// perfectly healthy signer — port answering, session_status active — and then
+// hits the Security framework's MODAL "A keychain cannot be found to store
+// 'kek.'" dialog the instant the first key is created. Nobody is there to
+// answer it, so createKey hangs until the caller's timeout.
+//
+// Nothing downstream can rescue that: the software-KEK fallback in session.ts
+// keys off SSP's boot-time SSP_NO_KEK_MARKER, which by then is long past. The
+// only place to catch it is BEFORE we choose the policy — here.
+//
+// `security default-keychain` is the probe: it is fast, prints the default
+// keychain path, needs no unlock, and raises no dialog. We downgrade to the
+// software KEK on a DEFINITE negative only (the command ran and reported no
+// default keychain, or the path it named does not exist). Anything ambiguous —
+// `security` missing, probe timed out — keeps the hardware policy, because
+// silently dropping to a file-backed KEK is a security downgrade and must never
+// happen on a maybe.
+
+export interface KeychainProbe {
+  usable: boolean;
+  /** Operator-facing explanation, surfaced by doctor and the session log. */
+  reason: string;
+}
+
+/** Raw `security default-keychain` outcome. `status` is null when it never ran. */
+export interface SecurityCmdResult {
+  status: number | null;
+  stdout: string;
+}
+
+function runSecurityDefaultKeychain(): SecurityCmdResult {
+  try {
+    const stdout = execFileSync('/usr/bin/security', ['default-keychain'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 3000,
+      encoding: 'utf8',
+    });
+    return { status: 0, stdout };
+  } catch (e) {
+    // execFileSync sets `status` to the exit code when the command RAN and
+    // failed (no default keychain → non-zero). A spawn failure or timeout
+    // leaves it null/undefined — that's the ambiguous case.
+    const err = e as { status?: number | null; stdout?: string | Buffer };
+    return {
+      status: typeof err.status === 'number' ? err.status : null,
+      stdout: err.stdout?.toString() ?? '',
+    };
+  }
+}
+
+/**
+ * Classify a `security default-keychain` result. Exported (with both effects
+ * injected) so the decision table is unit-testable off darwin.
+ */
+export function probeMacKeychain(
+  run: () => SecurityCmdResult = runSecurityDefaultKeychain,
+  fileExists: (p: string) => boolean = existsSync,
+): KeychainProbe {
+  const { status, stdout } = run();
+  if (status === null) {
+    return { usable: true, reason: 'keychain probe did not run — assuming the Keychain is usable' };
+  }
+  if (status !== 0) {
+    return {
+      usable: false,
+      reason: 'this login session has no default keychain (`security default-keychain` failed)',
+    };
+  }
+  // `security` prints the path wrapped in double quotes, indented.
+  const kcPath = stdout.trim().replace(/^"(.*)"$/s, '$1').trim();
+  if (!kcPath) {
+    return { usable: false, reason: 'no default keychain is set for this login session' };
+  }
+  if (!fileExists(kcPath)) {
+    return { usable: false, reason: `default keychain ${kcPath} does not exist` };
+  }
+  return { usable: true, reason: `default keychain ${kcPath}` };
+}
+
+let macKeychainProbeCache: KeychainProbe | undefined;
+/** Cached process-wide probe (the answer cannot change under a running agent). */
+export function macKeychainUsable(): KeychainProbe {
+  macKeychainProbeCache ??= probeMacKeychain();
+  return macKeychainProbeCache;
+}
+
+/** Test seam: drop the cached probe result. */
+export function resetMacKeychainProbeCache(): void {
+  macKeychainProbeCache = undefined;
+}
+
 /**
  * The KEK policy to try FIRST. `isDevEnv` forces software (an explicit
- * force-software override); otherwise hardware-preferred. When hardware reports
- * no usable KEK at spawn time, the session falls back to softwareKekPolicy()
- * once (see session.ts doInit).
+ * force-software override); otherwise hardware-preferred — except on a Mac with
+ * no usable default keychain, where "hardware" would deadlock on a modal dialog
+ * at first key creation (see the preflight above) and we pre-empt it with the
+ * persisted software KEK. When hardware reports no usable KEK at spawn time,
+ * the session falls back to softwareKekPolicy() once (see session.ts doInit).
  */
 export function resolveKekPolicy(): KekPolicy {
-  return isDevEnv() ? softwareKekPolicy() : hardwareKekPolicy();
+  if (isDevEnv()) return softwareKekPolicy();
+  if (process.platform === 'darwin') {
+    const probe = macKeychainUsable();
+    if (!probe.usable) {
+      return {
+        ...softwareKekPolicy(),
+        reason: `macOS Keychain unusable — ${probe.reason}`,
+      };
+    }
+  }
+  return hardwareKekPolicy();
 }

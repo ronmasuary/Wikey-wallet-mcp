@@ -8,6 +8,7 @@ import {
   isDevEnv,
   hardwareKekPolicy,
   softwareKekPolicy,
+  probeMacKeychain,
   SSP_NO_KEK_MARKER,
 } from '../src/core/binPaths.js';
 
@@ -125,6 +126,62 @@ test('softwareKekPolicy: persists + reuses dev.kek even when isDevEnv is unset (
 
     const second = softwareKekPolicy();
     assert.equal(second.env.SSP_KEK, material, 'second call reuses the persisted KEK (restart-stable)');
+  } finally {
+    restoreEnv(prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── macOS Keychain preflight ────────────────────────────────────────────────
+// The decision table is exercised with both effects injected, so it runs (and
+// means the same thing) on every platform — not just darwin.
+
+test('probeMacKeychain: a real default keychain path → usable', () => {
+  const p = probeMacKeychain(
+    () => ({ status: 0, stdout: '    "/Users/ofir/Library/Keychains/login.keychain-db"\n' }),
+    (f) => f === '/Users/ofir/Library/Keychains/login.keychain-db',
+  );
+  assert.equal(p.usable, true);
+  assert.match(p.reason, /login\.keychain-db/);
+});
+
+test('probeMacKeychain: `security` ran and failed → NOT usable (no default keychain)', () => {
+  // This is the reported failure: the login session has no default keychain, so
+  // SSP's lazy Keychain KEK fetch would raise the modal "A keychain cannot be
+  // found to store 'kek.'" dialog at first key creation and hang.
+  const p = probeMacKeychain(() => ({ status: 1, stdout: '' }), () => true);
+  assert.equal(p.usable, false);
+  assert.match(p.reason, /no default keychain/i);
+});
+
+test('probeMacKeychain: default keychain named but missing on disk → NOT usable', () => {
+  const p = probeMacKeychain(
+    () => ({ status: 0, stdout: '"/Users/ofir/Library/Keychains/login.keychain-db"' }),
+    () => false,
+  );
+  assert.equal(p.usable, false);
+  assert.match(p.reason, /does not exist/);
+});
+
+test('probeMacKeychain: empty output → NOT usable', () => {
+  const p = probeMacKeychain(() => ({ status: 0, stdout: '  \n' }), () => true);
+  assert.equal(p.usable, false);
+});
+
+test('probeMacKeychain: probe could not run (status null) → usable (no silent downgrade on a maybe)', () => {
+  const p = probeMacKeychain(() => ({ status: null, stdout: '' }), () => false);
+  assert.equal(p.usable, true);
+  assert.match(p.reason, /did not run/);
+});
+
+test('resolveKekPolicy: non-darwin never consults the keychain probe', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'wmcp-kek-'));
+  const prev = setEnv({ isDevEnv: undefined, WIKEY_SSP_DIR: dir });
+  try {
+    const p = resolveKekPolicy();
+    if (process.platform === 'darwin') return; // covered by the probe tests above
+    assert.equal(p.provider, 'auto');
+    assert.equal(p.reason, undefined);
   } finally {
     restoreEnv(prev);
     rmSync(dir, { recursive: true, force: true });
