@@ -262,7 +262,7 @@ export class SessionManager {
         {
           env: {
             ...process.env,
-            HOME: walletHome(), // symmetry with wallet-cli; keeps any HOME-derived paths under the root
+            // HOME: walletHome(), // symmetry with wallet-cli; keeps any HOME-derived paths under the root
             SSP_HMAC_KEY: key.toString('utf8'), // env values must be strings; SSP os.Unsetenv's it
             ...kek.env,
           },
