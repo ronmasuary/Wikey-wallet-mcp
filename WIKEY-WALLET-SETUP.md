@@ -222,7 +222,19 @@ the fully-explicit form instead. Get the path with `npm prefix -g`:
 
 On Linux/macOS the path is `<npm prefix -g>/lib/node_modules/wikey-wallet-mcp/dist/mcp-server.js`.
 
-**Restart the agent client** after editing the config.
+### ⚠️ Now fully restart the agent client — this step is not optional
+
+**MCP hosts load their servers exactly once, at client startup.** Editing the config
+above changes nothing in a client that is already running. **Quit the application and
+start it again** — closing the window, ending the conversation, or starting a new chat
+does *not* reload MCP servers.
+
+This cannot be worked around from inside a chat, and the wallet cannot prompt you to
+do it: until the client restarts, the server is not loaded, so it has no way to say
+anything at all. That is why `wikey-wallet-mcp doctor` (§4) ends with this same
+instruction — it runs in your terminal, where you actually are at that moment.
+
+The same rule applies to every future upgrade — see [§10](#10-updating-an-existing-install).
 
 ---
 
@@ -232,24 +244,52 @@ Ask the agent to call **`wallet_getting_started`**. That tool inspects live stat
 reports exactly which onboarding step you are on plus the precise next action. If the
 tool list came through, you will get a real answer rather than "no such tool".
 
+Its reply also carries a **`version`** field (the build actually serving the call) and,
+if the package on disk has moved ahead of the running process, a **`restartRequired`**
+block spelling out that you are still talking to the old build.
+
 ---
 
 ## 7. First run — onboarding order matters
 
-A brand-new user has nothing set up. The sequence is fixed; doing it out of order
-fails:
+A brand-new user has nothing set up. **There are two ways to start, and the first
+question is which one applies — not which step comes first.**
 
-1. **Create a signing key** — `wallet_keys_create`.
-2. **Fund that key with OST gas** — send OST to the address the previous step
-   returned. Nothing can be broadcast on-chain until this is done. *(A human has to
-   do this; the agent cannot conjure gas.)*
+> **Answer this before creating anything:** were you given an **invitation link** by
+> your organization or a sponsor?
+>
+> A sponsor invite always provisions a **fresh** identity and never adopts an existing
+> key. So a key created "to get started" *before* redeeming an invite is stranded —
+> unfunded, without a safe, and listed next to your real account in `wallet_accounts`
+> from then on. It is harmless but permanent and confusing.
+
+**Path A — Individual (you fund yourself).** The sequence is fixed; doing it out of
+order fails:
+
+1. **Create a signing key** — `wallet_keys_create`. It returns the new
+   `omnistar1…` address *and* a **`fundingUrl`**.
+2. **Fund that key with OST gas.** Open the `fundingUrl` the previous step handed
+   back — it is the Wikey store with your new address already filled in:
+
+   ```
+   https://store.wikey.io/?address=omnistar1…
+   ```
+
+   Use that link rather than visiting the bare store and pasting the address by
+   hand; a mistyped bech32 address sends real OST somewhere unrecoverable. Nothing
+   can be broadcast on-chain until this is done. *(A human has to do this; the agent
+   cannot conjure gas.)*
 3. **Create a safe + claim a username** — `wallet_tx_create_safe`.
 4. Then, as needed: add users, set governance policies, send assets, or enroll a
    gateway passkey (`wallet_gateway_register`) to call third-party APIs and MCPs.
 
-If you were given an **invite link** by whoever sent you this package, skip the manual
-sequence — call `wallet_onboard_sponsor` with the invite instead. It funds the key,
-creates the safe, and enrolls the passkey in one flow.
+**Path B — Sponsored (an invitation link).** Skip the manual sequence entirely: call
+`wallet_onboard_sponsor` with the invite. One call creates the key, funds it from the
+sponsor grant (**you never buy or send gas**), and creates your account + safe —
+usually enrolling the gateway passkey too. Takes a few minutes.
+
+Unsure which you are on? Call `wallet_getting_started`. On a fresh install it reports
+stage `no-key` and returns both options with the exact tool for each.
 
 ### There is no default account
 
@@ -439,20 +479,26 @@ window).
 wikey-wallet-mcp doctor
 ```
 
-Expect `READY: all binaries present.` as the last line before the NOTE.
+Expect `READY: all binaries present.` — the line above the NOTE — and the `version:`
+line at the top, which is what is now **installed on disk**.
 
-Then check the live tool list — this is the reliable test, because the package
-version number alone does not change on every release:
+Then ask the agent to call **`wallet_getting_started`**. This is the definitive test,
+because the server checks it for you:
 
-- The tool **`wallet_accounts`** must be present. It is new in this build; if your
-  client does not list it, you are still talking to the **old** server process. Go
-  back to step 7 and restart the client properly, then confirm with
-  `npm ls -g wikey-wallet-mcp` that the global install resolves where you expect.
+- **`restartRequired` present** → you skipped, or botched, step 7. The block names
+  both versions (`running` vs `installed`) and says so in plain language. Everything
+  you get from the wallet until you fully quit and reopen the client comes from the
+  **old** build. Go back to step 7; if a proper restart does not clear it, confirm
+  with `npm ls -g wikey-wallet-mcp` that the global install resolves where you expect.
+- **`restartRequired` absent and `version` matching `doctor`** → the update landed and
+  the new code is serving.
 
-A second, stronger check that the new code is actually running: call
-`wallet_getting_started`. On a machine with more than one key it must report
-`stage: "multiple-accounts"` and give every account its own stage in `accounts[]`.
-An older server reports a single top-level stage instead.
+The server can only make this comparison from *inside* a running process, so it
+detects the upgrade case (package replaced under a live client) — not a first install,
+where nothing is loaded yet to notice anything.
+
+Older packages have neither field. If `wallet_getting_started` comes back without a
+`version` at all, that itself means you are on a pre-update build.
 
 Finally, call **`wallet_getting_started`**. It reads live state and will tell you
 where the account stands — an update does not move you backwards in onboarding, so
@@ -552,6 +598,75 @@ recovery tool without a per-call approval prompt, allowlist it — for Claude Co
 | Keys "disappeared" after a restart | The keystore was encrypted under an **ephemeral** KEK before a persistent `WIKEY_SSP_DIR` existed → unrecoverable. Mint fresh keys and keep `WIKEY_SSP_DIR` fixed. |
 | Collisions with an existing wallet or treasury setup | You reused `~/.ssp`. Switch this MCP to a separate root such as `.ssp-mcp` (above). |
 | `wallet_config_show` names an account that does not exist | An older install's default-key pointer; it is blanked once on first start (§10). Harmless. |
+
+---
+
+## 12. Uninstalling
+
+Ask the agent to call **`wallet_uninstall`**. With **no arguments it deletes
+nothing** — it returns a plan: everything that would be removed, an audit of
+every account, and `residuals[]` listing what would still be left on the machine
+afterwards. Always run that first and read it.
+
+### Read the account audit before anything else
+
+Deleting a signing key is **irreversible**. The private material is encrypted
+under a key-encryption key held by this machine; it cannot be restored from a
+backup, a passphrase, or by Wikey — Wikey never had it. The **only** way back
+into an account is its on-chain recovery helpers approving a move onto a new key,
+and only if they were configured *before* the key was destroyed.
+
+The plan gives every account one of four verdicts:
+
+| Verdict | Meaning |
+| ------- | ------- |
+| `recoverable` | Enough helpers live outside this machine to approve a recovery later. |
+| `no-helpers` | No helper can approve anything. **Deleting loses the account permanently.** A recovery *policy* may still exist — an empty helper list protects nothing. |
+| `helpers-are-local` | Helpers exist, but too many of them are keys **in this same keystore**, which this uninstall also deletes. Nominally recoverable, actually a total loss. |
+| `unknown` | The helper list could not be read. Treated as unrecoverable on purpose. |
+
+If any account is not `recoverable`, the fix is **`wallet_tx_edit_helpers`
+before uninstalling** — not a confirmation flag.
+
+### Enabling the destructive step
+
+Uninstalling is **off by default**. A human has to add it to the server's `env`
+block in the client config and fully restart the client:
+
+```json
+"env": { "WIKEY_ALLOW_UNINSTALL": "1" }
+```
+
+An agent cannot set its own environment, which is the point: wiping a keystore
+should require a person at the config file. Without it, `wallet_uninstall` still
+plans, but refuses to delete.
+
+### Finishing the job
+
+The tool removes its state and the npm package, then reports `residuals[]` — the
+things still on the machine. Expect at least:
+
+- **The `wikey-wallet` entry in your client config.** Always manual: the tool
+  reports the file path but never edits it, because one bad write would break
+  every other MCP server listed there. Delete the entry, then restart the client.
+- **Any bin shim Windows refused to release** — the shell that launched the
+  server holds it open. Re-run `npm uninstall -g wikey-wallet-mcp` after quitting
+  the client.
+- **Files in the state root that are not ours.** If `WIKEY_SSP_DIR` is shared
+  with another wallet tool, that tool's keystore is deliberately left alone.
+- **Your source tree**, if this was a linked install (`npm i -g .`).
+
+You can check what is left at any time — including after the client is gone:
+
+```bash
+wikey-wallet-mcp doctor
+```
+
+### What uninstalling does NOT do
+
+It deletes nothing on-chain. Your accounts, safes, balances, users and policies
+all continue to exist. What is destroyed is this machine's ability to authorize
+anything as them — including moving whatever those safes still hold.
 
 ---
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyAccount, buildGettingStarted } from '../src/core/gettingStarted.js';
+import { classifyAccount, buildGettingStarted, storeFundingUrl, WIKEY_STORE_URL } from '../src/core/gettingStarted.js';
 import { extractAddresses, parseFunded } from '../src/core/accounts.js';
 
 const ADDR = 'omnistar1abcdef0123456789';
@@ -57,15 +57,90 @@ function queryFor(state: Record<string, { name?: string; funded?: boolean; safe?
   };
 }
 
-test('buildGettingStarted: brand-new install classifies no-key and names the create tool', async () => {
+test('buildGettingStarted: brand-new install classifies no-key and offers BOTH ways to start', async () => {
   const r = await buildGettingStarted(async () => '', 'wikey-wallet-mcp', () => []);
   assert.equal(r.stage, 'no-key');
   assert.equal(r.keyCount, 0);
   assert.deepEqual(r.accounts, []);
-  assert.equal(r.next[0]?.tool, 'wallet_keys_create');
-  // setDefault is gone — creating a key no longer changes global signing identity.
-  assert.equal(r.next[0]?.args, undefined);
   assert.equal(r.capabilities, undefined);
+
+  // The fork comes FIRST and carries no tool: the sponsored path mints its own
+  // key, so creating one before the user answers strands it.
+  assert.equal(r.next[0]?.tool, undefined);
+  assert.match(r.next[0]!.action, /ASK THE USER FIRST/);
+
+  // Option 1 — self-funded, and it must name the store the user buys OST at.
+  assert.equal(r.next[1]?.tool, 'wallet_keys_create');
+  // setDefault is gone — creating a key no longer changes global signing identity.
+  assert.equal(r.next[1]?.args, undefined);
+  assert.match(r.next[1]!.action, /https:\/\/store\.wikey\.io\//);
+
+  // Option 2 — invitation link, redeemed WITHOUT creating a key first.
+  assert.equal(r.next[2]?.tool, 'wallet_onboard_sponsor');
+  assert.ok((r.next[2]?.args as { invite?: string })?.invite);
+  assert.match(r.next[2]!.action, /Do NOT call wallet_keys_create first/);
+
+  // Both options are in the summary too, for a client that surfaces only that.
+  assert.match(r.summary, /store\.wikey\.io/);
+  assert.match(r.summary, /invitation link/i);
+});
+
+test('storeFundingUrl prefills the address, and degrades to the bare store when it cannot', () => {
+  assert.equal(storeFundingUrl(ADDR), `${WIKEY_STORE_URL}?address=${ADDR}`);
+  // A bad address must never produce a link that silently prefills garbage.
+  assert.equal(storeFundingUrl(undefined), WIKEY_STORE_URL);
+  assert.equal(storeFundingUrl(''), WIKEY_STORE_URL);
+  assert.equal(storeFundingUrl('cosmos1abc'), WIKEY_STORE_URL);
+  assert.equal(storeFundingUrl('omnistar1abc?evil=1&x=2'), WIKEY_STORE_URL);
+  assert.equal(storeFundingUrl('OMNISTAR1ABC'), WIKEY_STORE_URL);
+});
+
+test('buildGettingStarted: unfunded key gets a PREFILLED store link, not the bare store', async () => {
+  const q = queryFor({ [ADDR]: { funded: false } });
+  const r = await buildGettingStarted(q, 'wikey-wallet-mcp', () => [ADDR]);
+  assert.equal(r.stage, 'unfunded');
+  // The address must be IN the link — that is the whole point; a bare store URL
+  // puts the user back to hand-copying a bech32 address into a payment form.
+  const link = `${WIKEY_STORE_URL}?address=${ADDR}`;
+  assert.ok(r.summary.includes(link), 'summary should carry the prefilled link');
+  assert.ok(r.next[0]!.action.includes(link), 'option 1 should carry the prefilled link');
+  assert.equal(r.next[1]?.tool, 'wallet_onboard_sponsor');
+  assert.match(r.next[1]!.action, new RegExp(`will not adopt ${ADDR}`));
+});
+
+// ── stale-build detection (the only restart notice a running server CAN give) ──
+
+test('buildGettingStarted: an in-place upgrade under a live client demands a restart', async () => {
+  const r = await buildGettingStarted(async () => '', 'wikey-wallet-mcp', () => [], undefined, {
+    running: '1.2.1',
+    installed: '1.3.0',
+  });
+  assert.equal(r.version, '1.2.1');
+  assert.equal(r.restartRequired?.installed, '1.3.0');
+  assert.match(r.restartRequired!.message, /RESTART YOUR AI CLIENT COMPLETELY/);
+  // Also in notes[], so a client that renders only prose still shows it.
+  assert.ok(r.notes?.some((n) => /RESTART YOUR AI CLIENT/.test(n)));
+});
+
+test('buildGettingStarted: matching or unknown versions raise no restart notice', async () => {
+  const same = await buildGettingStarted(async () => '', 'wikey-wallet-mcp', () => [], undefined, {
+    running: '1.2.1',
+    installed: '1.2.1',
+  });
+  assert.equal(same.restartRequired, undefined);
+  assert.equal(same.version, '1.2.1');
+  assert.equal(same.notes, undefined);
+
+  // A failed version lookup ('0.0.0' / undefined) must never invent a notice.
+  const unknown = await buildGettingStarted(async () => '', 'wikey-wallet-mcp', () => [], undefined, {
+    running: '1.2.1',
+    installed: '0.0.0',
+  });
+  assert.equal(unknown.restartRequired, undefined);
+
+  const absent = await buildGettingStarted(async () => '', 'wikey-wallet-mcp', () => []);
+  assert.equal(absent.restartRequired, undefined);
+  assert.equal(absent.version, undefined);
 });
 
 test('buildGettingStarted: one ready key reports its stage at top level', async () => {

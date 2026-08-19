@@ -129,11 +129,48 @@ the call fails — or times out with `TIMEOUT` after `wallet-cli`'s ~60 s
 `signTimeout` — rather than signing. The mechanism is "403 / no valid proof," not
 an indefinite stall.
 
+## Destructive uninstall (`wallet_uninstall`)
+
+`wallet_uninstall` deletes signing keys, which makes it the highest-consequence
+tool in the surface and a capability a rogue or prompt-injected model would want.
+Its protections, and the honest limit of each:
+
+**The operator env gate is the only real control.** The destructive phase refuses
+unless `WIKEY_ALLOW_UNINSTALL=1` is present in the server's environment. That
+value is set by a human in the MCP client config and read at process start, so it
+is outside the model's reach entirely — the same class of control as
+`WIKEY_UNLOCK_CONFIG`. **Deployments that never need uninstall should simply not
+set it**, which removes the capability rather than guarding it.
+
+**The confirmation phrase is not a security boundary.** It protects against
+*accidents* — a mis-called tool, a stale plan after the keystore changed (the
+phrase embeds the live key count, so it stops matching). It does **not** stop an
+injected model, which can read the plan output and echo the phrase straight back.
+It is stated here rather than left to look stronger than it is.
+
+**The recoverability audit is a safety control, not a security one.** It refuses
+to delete when an account has no recovery helper that survives the machine, and
+`acceptPermanentLoss` overrides it. It is defence against loss, not against an
+adversary who is willing to set that flag.
+
+Two design choices bound the blast radius regardless:
+
+- **Allow-list deletion.** Only the entries this server owns are removed
+  (`keystore`, `dev.kek`, `.wallet-cli`, `bin`, `idp`, `recovery-requests.json`,
+  `install-child-mode.cjs`). The state root is never removed recursively, because
+  `WIKEY_SSP_DIR` may be shared with other Wikey tooling — a machine was observed
+  with a foreign `keystore-auto/` beside ours. Anything unrecognized is reported
+  and left in place.
+- **Client config is never written.** The tool locates config files that mention
+  this server and reports their **paths only** — it never returns their contents,
+  which list other servers' credentials, and never edits them, since one bad
+  write would break every other MCP server in the file.
+
 ## Documented follow-ups (not in v1)
 
 Intent verification (decode/simulate the unsigned `Sign Request` bytes and
 assert they match the typed tool args), server-side spend caps + destination
-allowlist, a tamper-evident hash-chained audit log, two-phase destructive ops,
+allowlist, a tamper-evident hash-chained audit log,
 binary checksum/signature pinning + SLSA provenance, and the asymmetric +
 hardware-backed signing end-state (which would make rotation near-unnecessary).
 The last requires SSP changes and is out of scope this round.

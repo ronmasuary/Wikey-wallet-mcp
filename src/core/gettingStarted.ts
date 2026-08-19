@@ -20,6 +20,27 @@
 
 import { listAccounts, type AccountSummary, type QueryRunner } from './accounts.js';
 import { daysSince, type RecoveryRequestRecord } from './recoveryRequests.js';
+import { detectStaleBuild, type RestartNotice } from './restartNotice.js';
+
+/** Where an individual (unsponsored) user buys the OST gas a new key needs. */
+export const WIKEY_STORE_URL = 'https://store.wikey.io/';
+
+/**
+ * The store link for a SPECIFIC key. The store reads `?address=` and prefills its
+ * "User address" field, which removes the one step of this flow a human can get
+ * wrong in an unrecoverable way: hand-copying a 40+ character bech32 address into
+ * a payment form. A typo there sends real OST to an address nobody holds.
+ *
+ * Only ever called with an address that came back from the keystore or from
+ * `keys create`, but the shape is checked anyway — a malformed value would
+ * produce a link that silently prefills garbage, which is worse than no prefill.
+ * `encodeURIComponent` for the same reason: the address goes in a query string,
+ * so it gets encoded like any other untrusted-position value.
+ */
+export function storeFundingUrl(address?: string): string {
+  if (!address || !/^omnistar1[0-9a-z]+$/.test(address)) return WIKEY_STORE_URL;
+  return `${WIKEY_STORE_URL}?address=${encodeURIComponent(address)}`;
+}
 
 /** Where a SINGLE account sits in the onboarding sequence. */
 export type AccountStage = 'unfunded' | 'no-safe' | 'recovery-pending' | 'ready';
@@ -47,6 +68,14 @@ export interface AccountReport extends AccountSummary {
 
 export interface GettingStartedReport {
   server: string;
+  /** The version of the code actually SERVING this call (not what is on disk). */
+  version?: string;
+  /**
+   * Set when the package on disk is newer than the running process — i.e. the
+   * user upgraded while their AI client was up. Until the client is restarted
+   * every answer here comes from the OLD build.
+   */
+  restartRequired?: RestartNotice;
   stage: Stage;
   summary: string;
   keyCount: number;
@@ -106,11 +135,21 @@ function stepsForAccount(stage: AccountStage, p: AccountProbe): NextStep[] {
     case 'unfunded':
       return [
         {
-          action: `Individual: fund this key by sending OST to ${p.address} (from an exchange, faucet, or another funded key via wallet_tx_send), then run wallet_getting_started again.`,
+          action:
+            `OPTION 1 — INDIVIDUAL (self-funded): buy OST for this key at ${storeFundingUrl(p.address)} — GIVE THE ` +
+            `USER THAT EXACT LINK, do not shorten it to the bare store address: it prefills the store's "User ` +
+            `address" field with ${p.address}, so they never have to copy the address by hand and cannot mistype ` +
+            `it. (An exchange, a faucet, or another funded key via wallet_tx_send work too.) Then run ` +
+            `wallet_getting_started again — it moves on to creating your account (safe).`,
         },
         {
           action:
-            'Sponsored / employee: if your organization gave you an invitation link, you do NOT fund the key yourself — give that link to your agent and it will call wallet_onboard_sponsor with it. That one call funds a NEW key, creates your account (safe), and enrolls your gateway passkey.',
+            'OPTION 2 — SPONSORED / EMPLOYEE: if your organization gave you an invitation link you do NOT fund ' +
+            'anything yourself — paste the link and this tool funds a key, creates your account (safe), and ' +
+            'enrolls your gateway passkey in one call. NOTE that an invite always provisions a FRESH identity, ' +
+            `so it will not adopt ${p.address}: that key stays behind, unfunded and unused. That is harmless, ` +
+            'but from then on it shows up alongside the real account in wallet_accounts, so confirm with the ' +
+            'user that the invite is the path they want before redeeming it.',
           tool: 'wallet_onboard_sponsor',
           args: { invite: '<the invitation link from your organization>' },
         },
@@ -164,7 +203,12 @@ function stepsForAccount(stage: AccountStage, p: AccountProbe): NextStep[] {
 function summarizeAccount(stage: AccountStage, p: AccountProbe): string {
   switch (stage) {
     case 'unfunded':
-      return `${who(p)} has no OST. It needs gas before it can create anything on-chain — fund it yourself, or have your organization sponsor it.`;
+      return (
+        `${who(p)} has no OST. It needs gas before it can create anything on-chain. Two ways to get it: buy ` +
+        `OST at ${storeFundingUrl(p.address)} — that link already carries this key's address, so the store ` +
+        `fills it in for the user — or, if your organization gave you an invitation link, redeem that instead ` +
+        `and the sponsor funds everything for you.`
+      );
     case 'no-safe':
       return `${who(p)} is funded but has no safe yet. Create its account (safe + username).`;
     case 'recovery-pending': {
@@ -215,8 +259,24 @@ export async function buildGettingStarted(
     load: (address: string) => RecoveryRequestRecord | null;
     clear: (address: string) => void;
   },
+  /**
+   * Build identity, injected for the same reason as `recovery` — testability.
+   * `running` is the version this PROCESS started with; `installed` is what is
+   * on disk right now. A mismatch means an in-place upgrade under a live client.
+   */
+  build?: { running?: string; installed?: string },
 ): Promise<GettingStartedReport> {
   const notes: string[] = [];
+
+  // Attached to every report, whatever stage: a user asking "what's next?" while
+  // unknowingly talking to a pre-upgrade build needs to hear that before they
+  // act on anything else the report says.
+  const restartRequired = detectStaleBuild(build?.running, build?.installed);
+  const common = {
+    ...(build?.running ? { version: build.running } : {}),
+    ...(restartRequired ? { restartRequired } : {}),
+  };
+  if (restartRequired) notes.push(restartRequired.message);
 
   // Keys are counted from the keystore DIRECTORY (the address is the filename),
   // never via `keys list` — an HTTP call into the signing-server that fails when
@@ -227,20 +287,59 @@ export async function buildGettingStarted(
   const keyCount = summaries.length;
 
   if (keyCount === 0) {
+    // A BRAND-NEW install. There are exactly two ways in, and they are not two
+    // orderings of the same steps: the sponsored path MINTS ITS OWN KEY
+    // (onboardSponsor never adopts an existing one — an invite always provisions
+    // a fresh identity). So creating a key first and only then producing an
+    // invitation link strands the key it just made: unfunded, safeless, and
+    // indistinguishable from the real one in `wallet_accounts` forever after.
+    // That is why the fork is the FIRST step here and neither option is the
+    // default — the question has to reach the user before anything is created.
     return {
       server: serverName,
+      ...common,
       stage: 'no-key',
       summary:
-        'No signing key yet. This is step 1 of onboarding — the same for individual and sponsored/employee users; only the later funding step differs.',
+        'Nothing is set up yet — this wallet has no signing key. There are TWO ways to start, and the ' +
+        'right one depends on where the funding comes from: (1) INDIVIDUAL — create your own key and fund ' +
+        `it yourself with OST gas from the Wikey store ${WIKEY_STORE_URL}, then create your account (safe); ` +
+        'or (2) SPONSORED — you were given an invitation link by your organization or a sponsor, and that ' +
+        'one link does everything (creates the key, funds it from the sponsor, and creates your account + ' +
+        'safe on-chain). ASK THE USER WHICH ONE THEY HAVE before creating anything: the sponsored path ' +
+        'mints its own key, so a key created up front would be left over, unfunded and unusable.',
       keyCount: 0,
       accounts: [],
       next: [
         {
           action:
-            'Create your first signing key. A key is required either way; whether you fund it yourself or your organization sponsors it is decided at the funding step.',
+            'ASK THE USER FIRST: "Do you have an invitation link from your organization/sponsor, or are you ' +
+            'setting yourself up as an individual?" Do not pick for them and do not create a key until they ' +
+            'answer — the two options below mint the key differently.',
+        },
+        {
+          action:
+            `OPTION 1 — INDIVIDUAL (self-funded). Step 1 of 3: create your first signing key. That call returns ` +
+            `a ready-made \`fundingUrl\` — the Wikey store (${WIKEY_STORE_URL}) with the new key's address ` +
+            `already filled in. GIVE THE USER THAT LINK VERBATIM so they never have to copy the address by ` +
+            `hand; buying OST there is step 2 (gas is required before anything can be broadcast on-chain). ` +
+            `Then run wallet_getting_started again and it will walk you through creating your account ` +
+            `(safe + username).`,
           tool: 'wallet_keys_create',
         },
+        {
+          action:
+            'OPTION 2 — SPONSORED (invitation link from your organization/sponsor). Ask the user to paste the ' +
+            'link and pass it straight to this tool: it does the WHOLE onboarding in one call — creates a new ' +
+            'signing key, funds it from the sponsor grant (the user never buys or sends gas themselves), and ' +
+            'creates their account + safe on-chain under the invite\'s username@organization handle, usually ' +
+            'also enrolling their gateway passkey. Takes a few minutes. Do NOT call wallet_keys_create first.',
+          tool: 'wallet_onboard_sponsor',
+          args: { invite: '<the invitation link from your organization/sponsor>' },
+        },
       ],
+      // Only ever the stale-build notice at this stage (no account to report on),
+      // but it is the stage a freshly-upgraded install lands on most often.
+      ...(notes.length ? { notes } : {}),
     };
   }
 
@@ -276,6 +375,7 @@ export async function buildGettingStarted(
     const { report, probe } = built[0]!;
     return {
       server: serverName,
+      ...common,
       stage: report.stage,
       summary: summarizeAccount(report.stage, probe),
       keyCount,
@@ -293,6 +393,7 @@ export async function buildGettingStarted(
   const pending = accounts.filter((a) => a.stage === 'recovery-pending');
   return {
     server: serverName,
+    ...common,
     stage: 'multiple-accounts',
     summary:
       `This machine holds ${keyCount} keys, so there is no single answer — each account has its own stage ` +

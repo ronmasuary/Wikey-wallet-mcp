@@ -299,6 +299,79 @@ test('a portfolio read holds concurrency down instead of firing everything at on
   assert.ok(peak > 1, 'but still overlap — a serial read would be slower than the CLI it replaces');
 });
 
+test('a 200 carrying no row for the asset is a FAILED read, not "not held"', async () => {
+  // The endpoint really does answer 200 with {"assets":[]} for an asset it
+  // cannot price (observed live for MATIC/POL). Letting that through would
+  // reach the ladder as R1-not-held — an unoverridable will-fail — on an asset
+  // the safe demonstrably holds, with a message listing that very asset.
+  const { deps } = stub({
+    held: [{ symbol: 'OST', address: 'omnistar1x' }],
+    priced: {}, // 200, but no row comes back
+  });
+
+  await assert.rejects(
+    () => fetchSafeAssets(deps, ADDR, ['OST']),
+    /no row for OST/,
+    'the signing path must refuse rather than report a phantom zero',
+  );
+});
+
+test('a 200-with-no-row is REPORTED on the portfolio path', async () => {
+  const { deps } = stub({
+    held: [
+      { symbol: 'OST', address: 'omnistar1x' },
+      { symbol: 'MATIC', address: '0x1' },
+    ],
+    priced: { OST },
+  });
+
+  const { safes, unavailable } = await fetchPortfolio(deps, ADDR);
+  assert.deepEqual(safes[0]!.assets.map((a) => a.symbol), ['OST']);
+  assert.equal(unavailable.length, 1);
+  assert.equal(unavailable[0]!.symbol, 'MATIC');
+  assert.match(unavailable[0]!.reason, /no row for MATIC/);
+});
+
+test('an alias answer is NOT mistaken for a missing row', async () => {
+  // Asking for MATIC legitimately answers with a row labelled POL. If the
+  // emptiness check were not alias-aware it would reject every MATIC read.
+  const { deps } = stub({ held: [{ symbol: 'MATIC', address: '0x1' }], priced: { MATIC: POL } });
+
+  const safes = await fetchSafeAssets(deps, ADDR, ['MATIC']);
+  assert.deepEqual(safes[0]!.assets.map((a) => a.symbol), ['POL']);
+});
+
+test('a token whose GAS coin prices empty fails loudly instead of reporting no-gas', async () => {
+  // R4 would otherwise say "safe holds no POL" about a safe that holds POL.
+  const { deps } = stub({
+    held: [
+      { symbol: 'USDC', address: '0x2' },
+      { symbol: 'POL', address: '0x1' },
+    ],
+    priced: { USDC },
+  });
+
+  await assert.rejects(() => fetchSafeAssets(deps, ADDR, ['USDC']), /no row for POL/);
+});
+
+test('two names for one coin yield ONE row, not a duplicate', async () => {
+  // A safe lists both MATIC and POL; the endpoint answers both with a POL row.
+  // One request per asset would otherwise show POL twice — something the old
+  // single-batch call could never do.
+  const { deps } = stub({
+    held: [
+      { symbol: 'MATIC', address: '0x1' },
+      { symbol: 'POL', address: '0x1' },
+      { symbol: 'OST', address: 'omnistar1x' },
+    ],
+    priced: { MATIC: POL, POL, OST },
+  });
+
+  const { safes, unavailable } = await fetchPortfolio(deps, ADDR);
+  assert.equal(unavailable.length, 0);
+  assert.deepEqual(safes[0]!.assets.map((a) => a.symbol), ['POL', 'OST']);
+});
+
 test('an empty account address is refused before any request', async () => {
   const { deps, calls } = stub({ held: [], priced: {} });
   await assert.rejects(() => fetchSafeAssets(deps, '  ', ['OST']), /no account address/);

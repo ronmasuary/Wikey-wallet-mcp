@@ -30,6 +30,11 @@
  *
  * The transport is deliberately thin — no retries, no caching. A stale price
  * is a wrong feasibility verdict, and this sits on the signing path.
+ *
+ * WHAT COUNTS AS A FAILED READ. Not just a timeout or a non-2xx: a 200 that
+ * carries no row for the asset asked about is also a failure, because the
+ * snapshot has already established the safe holds it. Anything else lets an
+ * unreadable price masquerade as an absent balance — see `price()` below.
  */
 
 import { AssetInfo, SafeAssets, findAsset, gasSymbolFor } from './txFeasibility.js';
@@ -85,6 +90,25 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
+}
+
+/**
+ * Collapse rows that describe the SAME coin, keeping the first.
+ *
+ * Needed because one request per asset can ask under two names for one coin:
+ * a safe lists both MATIC and POL, and the endpoint answers BOTH with a row
+ * labelled POL. The old single-batch call could not produce this — the server
+ * returned one row per coin — so without this the portfolio gains a duplicate
+ * the previous implementation never showed.
+ */
+function dedupe(rows: AssetInfo[]): AssetInfo[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => {
+    const key = (r.symbol ?? '').trim().toUpperCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** An asset whose price could not be read. Reported, never silently dropped. */
@@ -337,7 +361,19 @@ async function collect(
 
       const price = async (a: SnapshotAsset): Promise<AssetInfo[]> => {
         try {
-          return await fetchOne(deps, safeAddress, a);
+          const rows = await fetchOne(deps, safeAddress, a);
+          // A 200 carrying no row for the asset we asked about is a FAILED READ,
+          // not an answer. The snapshot already told us the safe holds it, so an
+          // empty result cannot mean "not held" — and if it were allowed through
+          // it would reach the ladder as R1-not-held, an UNOVERRIDABLE will-fail,
+          // whose message would then list the very asset it claims is absent.
+          // Alias-aware on purpose: asking for MATIC legitimately answers POL.
+          if (!findAsset(rows, a.symbol)) {
+            throw new AssetInfoError(
+              `pricing returned no row for ${a.symbol}, which the snapshot lists as held`,
+            );
+          }
+          return rows;
         } catch (e) {
           if (!unavailable) throw e;
           unavailable.push({ safeAddress, symbol: a.symbol, reason: (e as Error).message });
@@ -351,7 +387,7 @@ async function collect(
 
       return {
         safeAddress,
-        assets: await resolveGas(deps, safeAddress, assets, priced, price),
+        assets: dedupe(await resolveGas(deps, safeAddress, assets, priced, price)),
         heldSymbols,
       };
     }),

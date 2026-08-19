@@ -148,6 +148,18 @@ export class SessionManager {
     this.log = cfg.log ?? ((m) => process.stderr.write(m + '\n'));
   }
 
+  /**
+   * Where the nonce counter lives. Exposed for ONE caller: `wallet_uninstall`,
+   * which otherwise leaves it behind. It defaults into `process.cwd()` rather
+   * than the state root, so it is the only file this server writes outside the
+   * root — invisible to a state-root-scoped cleanup, and a user who goes looking
+   * finds an unexplained dotfile in their working directory. Not sensitive (a
+   * small integer and a path), unlike anything else this class holds.
+   */
+  get nonceFilePath(): string {
+    return this.nonceFile;
+  }
+
   // ─── lazy session bring-up (race-guarded, init-once) ────────────────────────
 
   async ensureSession(): Promise<void> {

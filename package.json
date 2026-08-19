@@ -1,6 +1,6 @@
 {
   "name": "wikey-wallet-mcp",
-  "version": "1.2.1",
+  "version": "1.3.1",
   "description": "Wikey Wallet MCP — a self-hosted, zero-custody MCP stdio server that exposes the Omnistar wallet/signing stack to a client's own agent through a typed, enforceable tool boundary.",
   "type": "module",
   "license": "MIT",
@@ -36,6 +36,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "docs"
   ],

@@ -311,3 +311,73 @@ test('a narrowed read still reaches every non-R1 rule (BTC path unchanged)', () 
     assert.equal(a.maxSuggested, b.maxSuggested, `maxSuggested matches at ${amount}`);
   }
 });
+
+// ─── R6 floor: deterministic vs demand-priced fees ──────────────────────────
+
+/** One safe holding `value` OST at $0.20. smallCoin 1e9, as the chain reports. */
+function ostSafe(value: string): SafeAssets[] {
+  return [
+    {
+      safeAddress: SAFE,
+      assets: [{ symbol: 'OST', value, smallCoin: '1000000000', priceValue: '0.2' }],
+    },
+  ];
+}
+
+test('a 3 OST safe can send 1 OST — the USD band used to forbid every amount', () => {
+  // The reported bug. OST's fee is 0.0044 OST, but $2 at $0.20/OST demanded 10
+  // OST of headroom, so a 3 OST safe got at-risk + maxSuggested 0 for ANY
+  // amount, including 0. Real fees observed on this chain are ~0.0045 OST.
+  const r = checkFeasibility({
+    safes: ostSafe('3'),
+    safe: SAFE,
+    asset: 'OST',
+    amount: BigInt(1_000_000_000),
+  });
+  assert.equal(r.verdict, 'likely-pass');
+  assert.equal(r.rule, 'R7-ok');
+  assert.equal(r.remaining, '2000000000');
+});
+
+test('the OST floor is the known fee times a safety multiple, not a USD guess', () => {
+  // 0.0044 OST × 3 = 0.0132 OST = 13_200_000 smallest units.
+  const r = checkFeasibility({ safes: ostSafe('3'), safe: SAFE, asset: 'OST', amount: BigInt(0) });
+  assert.equal(r.maxSuggested, String(3_000_000_000 - 13_200_000));
+});
+
+test('OST still refuses a drain and still flags genuinely thin headroom', () => {
+  // The fix must not turn R6 off — only right-size it.
+  const drain = checkFeasibility({
+    safes: ostSafe('3'),
+    safe: SAFE,
+    asset: 'OST',
+    amount: BigInt(3_000_000_000),
+  });
+  assert.equal(drain.rule, 'R3-full-drain');
+
+  // Leaves 1_000_000 (0.001 OST) — under the 13_200_000 floor, so still at-risk.
+  const thin = checkFeasibility({
+    safes: ostSafe('3'),
+    safe: SAFE,
+    asset: 'OST',
+    amount: BigInt(2_999_000_000),
+  });
+  assert.equal(thin.verdict, 'at-risk');
+  assert.equal(thin.rule, 'R6-headroom');
+  assert.match(thin.reason, /13200000 floor/, 'the floor is stated, not asserted');
+});
+
+test('demand-priced chains keep the USD band untouched', () => {
+  // BTC's fee really does track block space, so $2 through its price is still
+  // the right shape. $2 / $60000 = 0.0000333 BTC = 3333 sat, which beats BTC's
+  // 0.00002 (2000 sat) minimum.
+  const r = checkFeasibility({
+    safes: btcSafe('0.5'),
+    safe: SAFE,
+    asset: 'BTC',
+    amount: BigInt(49_999_000),
+  });
+  assert.equal(r.verdict, 'at-risk');
+  assert.equal(r.rule, 'R6-headroom');
+  assert.equal(r.maxSuggested, String(50_000_000 - 3333));
+});

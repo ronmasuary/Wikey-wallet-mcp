@@ -116,10 +116,22 @@ interface ChainRule {
    */
   reserve: number;
   /**
-   * Absolute floor for the R6 headroom band, used when the USD-derived floor
+   * Absolute floor for the R6 headroom band, used when the derived floor
    * is smaller (or when no price is available).
    */
   minHeadroom: number;
+  /**
+   * Worst-case fee for a simple transfer, in DISPLAY units — set ONLY for chains
+   * whose fee is DETERMINISTIC rather than priced by block-space demand.
+   *
+   * When present it replaces the USD band entirely (see headroomFloor). The USD
+   * band exists because a demand-priced fee genuinely costs dollars and varies;
+   * converting $2 through the coin's price is a reasonable proxy there. On a
+   * chain where the fee is a fixed arithmetic product, that proxy is not
+   * conservative, it is simply wrong: it invents a number thousands of times the
+   * real cost and, for a cheap coin, exceeds the entire balance.
+   */
+  maxFee?: number;
   /** Alternative symbols the same coin appears under. */
   aliases?: string[];
 }
@@ -133,11 +145,28 @@ const CHAINS: Record<string, ChainRule> = {
   SOL: { reserve: 0.001, minHeadroom: 0.00001 },
   ADA: { reserve: 1, minHeadroom: 0.2 },
   XRP: { reserve: 1, minHeadroom: 0.0001 },
-  OST: { reserve: 0, minHeadroom: 0.001 },
+  // Omnistar's fee is gas LIMIT × gas PRICE, both fixed: the three priority
+  // tiers select the limit (200k / 300k / 400k) and share one gas price of 11
+  // (wallet-cli config `defaults.gas` / `defaults.gasPrice`; see feeChoice.ts).
+  // Worst case is therefore 400_000 × 11 = 4_400_000 nost = 0.0044 OST, which
+  // matches fees observed on real transfers. If the chain's gas price changes,
+  // this constant is what needs changing.
+  OST: { reserve: 0, minHeadroom: 0.001, maxFee: 0.0044 },
 };
 
-/** Fees track block-space demand, not your balance — so the floor is USD-shaped. */
+/**
+ * Fees on demand-priced chains track block-space demand, not your balance — so
+ * the floor is USD-shaped. Applies only to chains with no `maxFee`.
+ */
 const USD_HEADROOM = 2;
+
+/**
+ * Multiple of a KNOWN worst-case fee to keep as headroom. Three covers a gas
+ * price nudged upward or a heavier-than-expected message while staying in the
+ * same order of magnitude as the real cost — which is the entire point of
+ * treating a deterministic fee differently from a speculative one.
+ */
+const FEE_SAFETY = 3;
 
 /**
  * layer2data.chain → the native coin that pays that chain's gas. Base is the one
@@ -252,15 +281,27 @@ export function gasSymbolFor(asset: AssetInfo): string | null {
 }
 
 /**
- * The R6 floor, in smallest units: whichever is larger of the asset's absolute
- * minimum and USD_HEADROOM converted through its own price.
+ * The R6 floor, in smallest units.
  *
  * A flat percentage is wrong at both ends — 0.5% of a dust balance is nothing,
  * 0.5% of 10 BTC is absurd — which is why this is denominated the way fees
- * actually are.
+ * actually are. But "the way fees actually are" differs by chain:
+ *
+ * - DETERMINISTIC fee (`maxFee` set): the cost is known arithmetic, so the floor
+ *   is that cost times a safety multiple. No price lookup, no guessing.
+ * - DEMAND-PRICED fee: the cost really does move with block space and really is
+ *   dollar-shaped, so $2 converted through the coin's own price is a fair proxy.
+ *
+ * Using the USD band on a deterministic chain was a real bug: OST's fee is
+ * 0.0044 OST, but at $0.20/OST the band demanded 10 OST of headroom — about
+ * 2000x the fee, and more than most test safes hold, so EVERY OST transfer came
+ * back 'at-risk' with maxSuggested 0.
  */
 function headroomFloor(asset: AssetInfo): bigint {
   const rule = chainRule(asset.symbol);
+  if (rule.maxFee !== undefined) {
+    return displayToSmallest(Math.max(rule.minHeadroom, rule.maxFee * FEE_SAFETY), asset.smallCoin);
+  }
   const price = Number(asset.priceValue ?? '');
   const byUsd = Number.isFinite(price) && price > 0 ? USD_HEADROOM / price : 0;
   return displayToSmallest(Math.max(rule.minHeadroom, byUsd), asset.smallCoin);
@@ -419,14 +460,15 @@ export function checkFeasibility(input: FeasibilityInput): Feasibility {
   }
 
   // ── R6: the one judgement call ──
-  if (remaining < reserve + headroomFloor(asset)) {
+  const floor = headroomFloor(asset);
+  if (remaining < reserve + floor) {
     return {
       ...base,
       verdict: 'at-risk',
       rule: 'R6-headroom',
       reason:
-        `This leaves ${remaining} ${symbol} (smallest units) to cover a fee taken from the same balance. ` +
-        `That is below the conservative floor for ${symbol}, so the transfer may fail. ` +
+        `This leaves ${remaining} ${symbol} (smallest units) to cover a fee taken from the same balance, ` +
+        `below the ${reserve + floor} floor for ${symbol}, so the transfer may fail. ` +
         `Send at most ${maxSuggested} to stay clear of it.`,
       balance: balance.toString(),
       remaining: remaining.toString(),

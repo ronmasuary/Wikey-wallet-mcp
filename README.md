@@ -81,6 +81,103 @@ Any MCP host works (Claude Desktop, IDE extensions, custom clients) — point it
 server config at `npx wikey-wallet-mcp` (or the absolute `dist/mcp-server.js`)
 over stdio.
 
+### ⚠️ Then restart your AI client — completely
+
+**MCP hosts load their servers exactly once, at client startup.** Adding the
+config above changes nothing in a client that is already running: the wallet
+tools will not appear, and the agent has no way to know they exist. **Quit the
+application and start it again** — closing the window or opening a new chat is
+not enough.
+
+The same applies to **upgrades**: `npm i -g wikey-wallet-mcp@latest` replaces the
+files on disk, but the client keeps the already-loaded old process alive, so you
+keep talking to the previous build until you restart. The server detects exactly
+this and reports it — `wallet_getting_started` returns a `restartRequired` block
+(`{ running, installed, message }`) whenever the on-disk version has moved ahead
+of the running one.
+
+Because a not-yet-loaded server has no channel to the user, the first-install
+instruction is delivered where the user actually is at that moment — the
+terminal. Run this straight after installing; it verifies the binaries **and**
+ends with the restart rule:
+
+```bash
+wikey-wallet-mcp doctor
+```
+
+### First run — the two ways to start
+
+Once the client is up, ask the agent to call **`wallet_getting_started`**. On a
+brand-new install it reports stage `no-key` and hands back **two options**, as a
+question for the user rather than a default:
+
+1. **Individual (self-funded)** — `wallet_keys_create`, then buy OST gas at the
+   Wikey store, then `wallet_tx_create_safe` for the account + username.
+
+   `wallet_keys_create` returns a ready-made **`fundingUrl`** alongside the new
+   address — the store with `?address=omnistar1…` already applied, which the
+   store reads to prefill its *User address* field:
+
+   ```
+   https://store.wikey.io/?address=omnistar1wssmy9zpm4jrngxmle0y54l9kr3sx7khw93wyn
+   ```
+
+   Relay that link verbatim instead of sending the user to the bare store to
+   paste an address by hand — a mistyped bech32 address is the one step of this
+   flow that loses real funds. `wallet_getting_started` builds the same link at
+   stage `unfunded`, for a key that already exists.
+2. **Sponsored** — the user pastes the **invitation link** from their
+   organization and `wallet_onboard_sponsor` does all of it in one call: creates
+   a key, funds it from the sponsor grant, and creates the account + safe (and
+   usually enrolls the gateway passkey).
+
+**The order matters.** An invite always provisions a *fresh* identity and never
+adopts an existing key, so a key created "to get started" before the user
+answers is stranded — unfunded, safeless, and permanently listed next to the
+real account in `wallet_accounts`. That is why the guide asks first and neither
+option is the default.
+
+### Uninstalling
+
+**`wallet_uninstall`** removes the wallet from the machine: signing keys, local
+state, and the npm package. Called with **no arguments it is read-only** and
+returns a plan — what would be deleted, an audit of every account, and what would
+still be left over (`residuals[]`). Run that first, always.
+
+Deleting a key is irreversible. The private material is encrypted under a KEK
+this machine holds; it cannot be restored from a backup, a passphrase, or by
+Wikey. **The only way back into an account is its on-chain recovery helpers**
+approving a move onto a new key — and only if they were configured beforehand.
+
+So the audit, not the deletion, is the substance of the tool. Two things it gets
+right that a naive check does not:
+
+- **A recovery policy is not a recovery path.** An account can carry the
+  policy with an *empty* helper list — the shape sponsored onboarding leaves
+  behind. It approves nothing. The verdict uses the approval threshold against
+  real helpers, never the policy's presence.
+- **A helper that lives on this machine dies with it.** Helpers are accounts, and
+  an account's helper can be another key in the same keystore. Wiping the machine
+  destroys the account and its rescuers in one act, so each helper is classified
+  local vs surviving and the verdict counts only survivors.
+
+The destructive phase is **off by default** and has four gates:
+
+| Gate | Effect |
+| ---- | ------ |
+| `confirm` phrase | Must match exactly. It embeds the live key count, so a plan taken before the keystore changed no longer applies. |
+| `WIKEY_ALLOW_UNINSTALL=1` | Operator env, set by a **human** in the client config and read at startup. An agent cannot set it. Never set it and the capability does not exist. |
+| `acceptPermanentLoss` | Required only when an account has no surviving recovery path. |
+| Session shutdown | The signer is stopped before any file is touched. |
+
+What it deliberately does **not** do: remove anything outside its own allow-list
+under the state root (which may be shared with other Wikey tooling), and edit
+your MCP client config (one bad write would break every other server in the
+file). Those come back as `residuals[]` with the exact path and command.
+
+**Uninstalling deletes nothing on-chain.** Accounts, safes and balances continue
+to exist — they simply become unreachable from this machine.
+
 ### Environment flags
 
 All Wikey behavior is driven by the server's own environment (the host's `env`
@@ -91,6 +188,7 @@ knowledge.**
 | ---- | ---- | ------ |
 | `WIKEY_SSP_DIR` | path | **The single persistence knob (operator, not agent).** The one state root holding the SSP keystore, the software KEK (`dev.kek`), the child binaries, and wallet-cli's config. Default `~/.ssp`. Mount **one volume** here and the wallet stack is restart-stable. If the machine already has a `~/.ssp` from another wallet tool or a treasury setup, point this MCP at a separate root (e.g. `~/.ssp-mcp`) so the two keystores cannot collide. |
 | `isDevEnv` | `"true"` / `"1"` | **Force software KEK** persisted to `<root>/dev.kek` (generated on first use, reused across restarts). **Unset / false → prod:** hardware-preferred KEK (`-kek-provider auto`); if no hardware enclave is present, the MCP **auto-falls-back once** to the persisted software KEK so keys still survive a restart (logged + shown in `doctor`/`session_status`). The KEK never reaches the model either way. |
+| `WIKEY_ALLOW_UNINSTALL` | `"1"` / `"true"` | **Operator opt-in for `wallet_uninstall`'s destructive phase.** Unset (the default) → the tool still returns its read-only plan but refuses to delete anything, and explains that a human must set this. Set by a person in the client config; an agent cannot set its own environment, which is what keeps a keystore wipe out of a rogue model's reach. Leave it unset on any deployment that never needs to uninstall. |
 | `installationScriptPath` | path | Explicit local path to `install-child-mode.cjs`. |
 | `installationScriptUrl` | URL | Download location for the install script, used only when no local script is found. |
 

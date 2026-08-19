@@ -55,6 +55,14 @@ import {
   assertConfigSetAllowed,
   clearDefaultKeyPointer,
   buildGettingStarted,
+  storeFundingUrl,
+  WIKEY_STORE_URL,
+  executeUninstall,
+  ALLOW_ENV,
+  detectInstall,
+  realFs,
+  npmUninstall,
+  findClientConfigs,
   onboardSponsor,
   buildRecoveryDeeplink,
   parseRecoveryDeeplink,
@@ -99,7 +107,8 @@ import {
 import { createConnection } from 'node:net';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { createRequireResolveVersion } from './version.js';
+import { createRequireResolveVersion, readInstalledVersionFromDisk } from './version.js';
+import { FIRST_INSTALL_RESTART_NOTICE } from './core/restartNotice.js';
 
 const SERVER_NAME = 'wikey-wallet-mcp';
 const SERVER_VERSION = createRequireResolveVersion();
@@ -115,11 +124,22 @@ manages signing keys, on-chain "safes" (accounts), users, governance policies,
 transactions, and passkey-authorized calls to 3rd-party APIs/MCPs via the gateway.
 Wikey never holds the keys.
 
-FIRST-RUN ONBOARDING IS A SEQUENCE — a brand-new user has nothing set up. Do it in order:
-  1. Create a signing key            → wallet_keys_create
-  2. Fund that key with OST gas       → the user sends OST to the key's address (required to broadcast anything)
-  3. Create a safe + username         → wallet_tx_create_safe
-  4. Then: add users, set policies, send assets, or enroll a gateway passkey.
+FIRST-RUN ONBOARDING HAS TWO ENTRY POINTS — a brand-new user has nothing set up, and
+which path they are on decides the very first call. ASK THEM, never assume:
+
+  A. INDIVIDUAL (self-funded) — three steps, in order:
+       1. Create a signing key       → wallet_keys_create
+       2. Fund it with OST gas       → buy OST at https://store.wikey.io/ and send it to
+                                       that key's address (required to broadcast anything)
+       3. Create a safe + username   → wallet_tx_create_safe
+
+  B. SPONSORED (an invitation link from their organization) — ONE call:
+       wallet_onboard_sponsor does all three: it creates a key, funds it from the
+       sponsor (the user never buys gas), and creates their account + safe.
+
+  Do NOT create a key "to get started" before knowing which one applies: an invite
+  always provisions a FRESH key, so a key made up front is left stranded, unfunded.
+  After either path: add users, set policies, send assets, or enroll a gateway passkey.
 
 THERE IS NO DEFAULT ACCOUNT. Anything that signs must be told which account to act
 as. With exactly one key that is automatic; with several, the tool REFUSES and you
@@ -169,7 +189,7 @@ const tools = [
   {
     name: 'wallet_getting_started',
     description:
-      "START HERE. Read-only onboarding guide that answers \"what can I do next?\" / \"help\" / \"how do I start?\". Inspects live state (every local key, its funding and safes) and classifies EACH ACCOUNT separately — stages are no-key → unfunded → no-safe → recovery-pending → ready. Returns { stage, summary, keyCount, accounts[], next[], capabilities?[] }, where each accounts[] entry carries its own stage and next steps. The top-level `stage` is that account's stage when there is exactly one key, and `multiple-accounts` when there are several: with no default key there is no single answer, and a ready account must not mask another one's unfinished recovery — read accounts[] in that case. Call this before guiding a new or unsure user. Never signs, never brings up the secure session.",
+      "START HERE. Read-only onboarding guide that answers \"what can I do next?\" / \"help\" / \"how do I start?\". Inspects live state (every local key, its funding and safes) and classifies EACH ACCOUNT separately — stages are no-key → unfunded → no-safe → recovery-pending → ready. Returns { stage, summary, keyCount, accounts[], next[], capabilities?[], version?, restartRequired? }, where each accounts[] entry carries its own stage and next steps. At stage no-key it returns the TWO ways to start — self-funded (create a key, buy OST at https://store.wikey.io/) or sponsored (redeem an invitation link, which does everything in one call) — as a question to put to the user, NOT a default to pick: the sponsored path mints its own key, so creating one first strands it. If `restartRequired` is set, relay it before anything else — the package was upgraded while the client stayed up, so this process is serving the OLD build until the user fully restarts their AI client. The top-level `stage` is that account's stage when there is exactly one key, and `multiple-accounts` when there are several: with no default key there is no single answer, and a ready account must not mask another one's unfinished recovery — read accounts[] in that case. Call this before guiding a new or unsure user. Never signs, never brings up the secure session.",
     inputSchema: { type: 'object', properties: {} },
   },
   // ── Query tools ──
@@ -341,7 +361,7 @@ const tools = [
   {
     name: 'wallet_keys_create',
     description:
-      'Generate a new keypair in the signing-server. Returns the new omnistar1... address, which is what you pass as `account` to act as it. Creating a key changes NOTHING about existing accounts — there is no default to displace — but it does mean the machine now holds more than one key, so subsequent signing calls will ask which account to use. This is a signing operation: it lazily brings up the secure SSP session on first use.',
+      'Generate a new keypair in the signing-server. Returns { result, fundingUrl, next }: `result` carries the new omnistar1... address, which is what you pass as `account` to act as it, and `fundingUrl` is the Wikey store link with that address ALREADY prefilled — RELAY IT TO THE USER VERBATIM rather than telling them to visit the store and paste the address, which is the one step of self-funding a human can get unrecoverably wrong. A new key holds no gas and can broadcast nothing until it is funded. Creating a key changes NOTHING about existing accounts — there is no default to displace — but it does mean the machine now holds more than one key, so subsequent signing calls will ask which account to use. Do NOT call this first when the user has a sponsor invitation link: wallet_onboard_sponsor mints its own key and the one made here would be stranded, unfunded. This is a signing operation: it lazily brings up the secure SSP session on first use.',
     inputSchema: { type: 'object', properties: {} },
   },
   // ── Config tools ──
@@ -821,6 +841,27 @@ const tools = [
       'Show the current gateway target and the enrolled passkey credential (client secret masked). Reports the resolved default-key account and whether the stored credential matches the active target. No network, no signing.',
     inputSchema: { type: 'object', properties: {} },
   },
+  // ── Uninstall (irreversible) ──
+  {
+    name: 'wallet_uninstall',
+    description:
+      'Remove Wikey Wallet from this machine — signing keys, local state, and the npm package. THIS DESTROYS KEYS IRREVERSIBLY: a deleted key cannot be restored from any backup, passphrase, or by Wikey, and the ONLY way back into an account is its on-chain recovery helpers approving a move onto a new key. Called with NO arguments it is READ-ONLY and returns a plan: what would be deleted, an audit of every account\'s recoverability, and what would still be left over afterwards (residuals[]). ALWAYS run the plan first and read it to the user — especially each account\'s `reason` — before asking whether to proceed; never call the destructive form on your own initiative. To delete, pass `confirm` equal to the plan\'s exact `confirmPhrase`. Four gates apply in order: the confirm phrase (which names the current key count, so a stale plan cannot delete a changed keystore); the operator env WIKEY_ALLOW_UNINSTALL=1, which a HUMAN must set in the client config — an agent cannot set it, and if it is missing the tool explains how; and `acceptPermanentLoss: true`, required only when some account has no recovery helper that survives this machine (set it ONLY on the user\'s explicit say-so after telling them which accounts it abandons). Deleting nothing on-chain: accounts, safes and balances continue to exist and simply become unreachable from here.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        confirm: {
+          type: 'string',
+          description:
+            "Exact `confirmPhrase` from the plan. Omit to get the read-only plan. Must come from the user's explicit agreement, not from you echoing the plan back.",
+        },
+        acceptPermanentLoss: {
+          type: 'boolean',
+          description:
+            'Proceed even though some accounts have no surviving recovery path and will be lost forever. Only ever the user\'s decision, made after hearing which accounts it abandons.',
+        },
+      },
+    },
+  },
   {
     name: 'wallet_gateway_logout',
     description:
@@ -1066,10 +1107,16 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // never via the signer — so an idle SSP session is never misread as no-key.
       // The recovery breadcrumb keeps a key that is mid-recovery from being told
       // to create a safe — the account already exists and is waiting on helpers.
-      return buildGettingStarted(query, SERVER_NAME, listKeystoreAddresses, {
-        load: loadRecoveryRequest,
-        clear: clearRecoveryRequest,
-      });
+      // The build pair (running vs on-disk) makes this tool the one place a
+      // "restart your client" notice can still reach the user: an in-place
+      // upgrade under a live client leaves THIS process serving the old code.
+      return buildGettingStarted(
+        query,
+        SERVER_NAME,
+        listKeystoreAddresses,
+        { load: loadRecoveryRequest, clear: clearRecoveryRequest },
+        { running: SERVER_VERSION, installed: readInstalledVersionFromDisk() },
+      );
 
     // ── reads ──
     case 'wallet_chain_info':
@@ -1156,7 +1203,63 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       //
       // No account is routed: this is the one signing command that must work
       // with an empty keystore.
-      return session.runWithSession(['keys', 'create'], { input: 'n\n' });
+      const created = await session.runWithSession(['keys', 'create'], { input: 'n\n' });
+
+      // Hand back the store link with the new address ALREADY in it. This is the
+      // exact moment the user needs it — the key exists and is worth nothing
+      // until it has gas — and it removes the only unrecoverable manual step in
+      // the individual path: retyping a bech32 address into a payment form.
+      //
+      // Best-effort by construction. The key is created and persisted before we
+      // ever look at the output, so a parse failure must degrade to the bare
+      // store URL and NEVER throw: losing the result here would leave the user
+      // with a key they cannot see the address of.
+      let fundingUrl = WIKEY_STORE_URL;
+      try {
+        fundingUrl = storeFundingUrl(parseCreatedKey(String(created)).address);
+      } catch {
+        /* unparseable output — the raw result still carries the address */
+      }
+      return {
+        result: created,
+        fundingUrl,
+        next:
+          `Give the user this link to buy OST gas for the new key: ${fundingUrl} — pass it VERBATIM. ` +
+          `It prefills the store's "User address" field, so nobody has to copy the address by hand. ` +
+          `The key cannot broadcast anything on-chain until it holds OST. Once funded, call ` +
+          `wallet_getting_started again for the next step (creating the account + safe).`,
+      };
+    }
+
+    // ── uninstall (irreversible) ──
+    case 'wallet_uninstall': {
+      // Every gate lives in executeUninstall so their ORDER is one reviewable
+      // thing rather than split across the boundary. With no `confirm` this is
+      // a read-only plan, which is why the env gate is not checked here: the
+      // plan is exactly where a user learns the gate exists and how to set it.
+      const install = await detectInstall();
+      return executeUninstall(
+        {
+          stateRoot: stateRoot(),
+          listKeys: listKeystoreAddresses,
+          query,
+          allowUninstall: ['1', 'true'].includes((process.env[ALLOW_ENV] ?? '').toLowerCase()),
+          fs: realFs,
+          shutdown: () => session.shutdown(),
+          // Taken from the session rather than recomputed from cwd, so a custom
+          // nonceFile is honoured and we never delete a path we do not use.
+          nonceFile: session.nonceFilePath,
+          installMode: install.mode,
+          ...(install.binDir ? { npmBinDir: install.binDir } : {}),
+          packageDir: install.mode === 'global-linked' ? install.packageDir : install.globalEntry,
+          npmUninstall,
+          findClientConfigs,
+        },
+        {
+          ...(input.confirm == null ? {} : { confirm: String(input.confirm) }),
+          ...(input.acceptPermanentLoss === true ? { acceptPermanentLoss: true } : {}),
+        },
+      );
     }
 
     // ── config ──
@@ -1695,6 +1798,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
 async function doctor(): Promise<number> {
   const out = (s: string) => process.stdout.write(s + '\n');
   out(`${SERVER_NAME} doctor`);
+  out(`version        : ${SERVER_VERSION}`);
   out('─'.repeat(40));
 
   const bins = resolveBins();
@@ -1731,6 +1835,11 @@ async function doctor(): Promise<number> {
   const loopback = await tcpReachable('127.0.0.1', 8080, 1500);
   out(`loopback 8080  : ${loopback ? 'reachable (SSP appears up)' : 'not reachable (normal when idle — SSP is lazy)'}`);
 
+  const install = await detectInstall();
+  const allowed = ['1', 'true'].includes((process.env[ALLOW_ENV] ?? '').toLowerCase());
+  out(`install mode   : ${install.mode}${install.mode === 'global-linked' ? ` (symlink → ${install.packageDir})` : ''}`);
+  out(`uninstall      : ${allowed ? `ENABLED (${ALLOW_ENV} set) — wallet_uninstall can delete keys` : `disabled (set ${ALLOW_ENV}=1 to enable)`}`);
+
   const script = locateInstallScript();
   const url = process.env.installationScriptUrl ?? process.env.WIKEY_INSTALL_SCRIPT_URL;
   out(`install script : ${script ?? (url ? `(none local — will download from ${url})` : '(not found — set installationScriptPath or installationScriptUrl)')}`);
@@ -1739,6 +1848,13 @@ async function doctor(): Promise<number> {
   out('─'.repeat(40));
   out(ready ? 'READY: all binaries present.' : 'NOT READY: missing binaries (the server will try the install script on startup).');
   out('NOTE: all 4 components (signing-server, ssp-util, wallet-cli, this MCP) must be version-aligned per release; drift causes 403 / malformed-proof.');
+  // doctor runs in the user's own terminal, which is the ONLY channel that
+  // exists before a client has loaded the server (an npm postinstall banner
+  // cannot do it — npm hides lifecycle output by default; see restartNotice.ts).
+  // So the first-install restart rule is repeated here verbatim.
+  out('');
+  out(`${FIRST_INSTALL_RESTART_NOTICE}`);
+  out('Once the client is up, ask your agent to call wallet_getting_started — it reports your exact next step.');
   return ready ? 0 : 1;
 }
 
