@@ -35,6 +35,13 @@
  * carries no row for the asset asked about is also a failure, because the
  * snapshot has already established the safe holds it. Anything else lets an
  * unreadable price masquerade as an absent balance — see `price()` below.
+ *
+ * THE SECOND JOB: RECEIVE ADDRESSES (fetchRecipientSafes). The same snapshot
+ * that lists what a safe holds also carries, per asset, the CHAIN-NATIVE address
+ * that asset is received at — which is what `--to` needs and what an account
+ * NAME has to resolve to. Reading it here rather than in a module of its own is
+ * deliberate: same endpoint, same JSON, same timeout budget, same injectable
+ * fetch. A second parser of /snapshot/client is how the two drift apart.
  */
 
 import { AssetInfo, SafeAssets, findAsset, gasSymbolFor } from './txFeasibility.js';
@@ -47,13 +54,17 @@ export type FetchLike = (url: string, init?: unknown) => Promise<{
   text(): Promise<string>;
 }>;
 
-export interface AssetInfoDeps {
+/**
+ * What a SNAPSHOT read needs — deliberately narrower than AssetInfoDeps.
+ *
+ * The snapshot carries receive addresses and costs nothing to price, so a caller
+ * that only wants addresses (fetchRecipientSafes) must not be made to supply
+ * pricing credentials it will never use: a missing `apiKey` would then fail a
+ * read that never touches the pricing endpoint.
+ */
+export interface SnapshotDeps {
   /** wallet-cli config `snapshotUrl` (e.g. https://…/mainnet/node). */
   snapshotUrl: string;
-  /** wallet-cli config `apiServerUrl` (e.g. https://…/mainnet/proxy). */
-  apiServerUrl: string;
-  /** wallet-cli config `apiKey`. */
-  apiKey: string;
   /**
    * Budget for ONE request. Generous on purpose: the point of narrowing is that
    * a single asset answers in well under a second, so this is a backstop for a
@@ -62,6 +73,13 @@ export interface AssetInfoDeps {
    */
   timeoutMs?: number;
   fetchImpl?: FetchLike;
+}
+
+export interface AssetInfoDeps extends SnapshotDeps {
+  /** wallet-cli config `apiServerUrl` (e.g. https://…/mainnet/proxy). */
+  apiServerUrl: string;
+  /** wallet-cli config `apiKey`. */
+  apiKey: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -127,6 +145,9 @@ interface SnapshotAsset {
 
 interface SnapshotEntry {
   address: string;
+  /** Safe name, e.g. `op20_safe` — system-derived from the account name. */
+  name?: string;
+  lastActive?: string;
   assets?: { assets?: SnapshotAsset[] };
 }
 
@@ -161,8 +182,12 @@ async function withTimeout<T>(
  * NOTE the snapshot carries only `{symbol, address, algo}` — no `layer2data`,
  * so it cannot tell a token from a native coin. That is why the gas coin can
  * only be resolved AFTER a priced row comes back (see resolveGas below).
+ *
+ * `name` and `lastActive` are carried through for the recipient path
+ * (fetchRecipientSafes), which has to name the safes it offers as a choice. The
+ * pricing path ignores them.
  */
-async function fetchSnapshot(deps: AssetInfoDeps, address: string): Promise<SafeSymbols[]> {
+async function fetchSnapshot(deps: SnapshotDeps, address: string): Promise<SafeSymbols[]> {
   const url =
     `${trimSlash(deps.snapshotUrl)}/snapshot/client` +
     `?env=main&publickey=${encodeURIComponent(address)}`;
@@ -182,19 +207,79 @@ async function fetchSnapshot(deps: AssetInfoDeps, address: string): Promise<Safe
   } catch {
     throw new AssetInfoError('snapshot read returned malformed JSON');
   }
-  if (!Array.isArray(parsed)) return [];
+  // A non-array body is a BROKEN read, not an empty account. Returning [] here
+  // would reach the recipient path as "op20 has no safe" and the pricing path as
+  // "this safe holds nothing" — two confident wrong answers assembled from a
+  // response we did not understand. An account that genuinely has no safe yet
+  // answers with an empty ARRAY, which still passes through as [].
+  if (!Array.isArray(parsed)) {
+    throw new AssetInfoError(
+      'snapshot read returned an unexpected shape (expected a list of safes) — ' +
+        'this is a failed read, not an account without safes',
+    );
+  }
 
   return (parsed as SnapshotEntry[])
     .filter((e) => !!e && typeof e === 'object')
     .map((e) => ({
       safeAddress: String(e.address ?? ''),
+      name: String(e.name ?? ''),
+      ...(e.lastActive ? { lastActive: String(e.lastActive) } : {}),
       assets: Array.isArray(e.assets?.assets) ? e.assets!.assets! : [],
     }));
 }
 
 interface SafeSymbols {
   safeAddress: string;
+  name: string;
+  lastActive?: string;
   assets: SnapshotAsset[];
+}
+
+/** One safe seen as a RECIPIENT: where assets land, with no balances involved. */
+export interface RecipientSafe {
+  /** The safe's own `omnistar1…` address. */
+  address: string;
+  /** e.g. `op20_safe` — system-derived from the owning account's name, unique. */
+  name: string;
+  /** As the snapshot reports it. Menu ordering and labelling only. */
+  lastActive?: string;
+  /** Per asset, the CHAIN-NATIVE address that receives it. */
+  assets: Array<{ symbol: string; address: string }>;
+}
+
+/**
+ * Every safe of `address`, with the chain-native address each receives each
+ * asset at — the read behind "transfer 2 BTC to op20".
+ *
+ * PRICES NOTHING, and takes no pricing credentials: a recipient needs an
+ * ADDRESS, not a balance. That is also what makes it safe to point at a THIRD
+ * PARTY's account — the only thing read is public receive information, and no
+ * request carries our api-key.
+ *
+ * Returns `[]` for an account with no safes. That is a real answer and the
+ * caller must distinguish it from a failed read, which THROWS (see
+ * fetchSnapshot): "op20 has no safe yet" and "op20's safes could not be read"
+ * lead to opposite advice, and the second must never be reported as the first.
+ *
+ * Rows naming no address are dropped — a row that carries no address cannot
+ * receive anything, and keeping it would let a menu offer a destination whose
+ * `to` is empty.
+ */
+export async function fetchRecipientSafes(
+  deps: SnapshotDeps,
+  address: string,
+): Promise<RecipientSafe[]> {
+  if (!address.trim()) throw new AssetInfoError('no account address to read safes for');
+
+  return (await fetchSnapshot(deps, address)).map((s) => ({
+    address: s.safeAddress,
+    name: s.name,
+    ...(s.lastActive ? { lastActive: s.lastActive } : {}),
+    assets: s.assets
+      .filter((a) => a?.symbol && a?.address)
+      .map((a) => ({ symbol: a.symbol, address: a.address })),
+  }));
 }
 
 /**

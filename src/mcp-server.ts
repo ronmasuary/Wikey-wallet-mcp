@@ -47,6 +47,7 @@ import {
   parseCreatedKey,
   resolveAccount,
   resolveAccountAddress,
+  AccountResolutionError,
   isChainAddress,
   signerArgsFor,
   buildPolicyQueue,
@@ -74,6 +75,14 @@ import {
   checkBankSend,
   fetchSafeAssets,
   fetchPortfolio,
+  fetchRecipientSafes,
+  pickRecipientSafe,
+  pickReceiveAddress,
+  checkAddressFamily,
+  checkSelfSend,
+  addressFamily,
+  suggestAccountNames,
+  unknownNameRefusal,
   parseDenomAmount,
   parseBalanceAmount,
   toSmallest,
@@ -82,6 +91,9 @@ import {
   clearRecoveryRequest,
   redact,
   type AccountEnv,
+  type RecipientSafe,
+  type SafeChoice,
+  type NameCandidate,
   type ResolvedAccount,
   type FieldSelector,
   type PolicyCondition,
@@ -200,28 +212,46 @@ const tools = [
   },
   {
     name: 'wallet_balance',
-    description: 'Get OST balance directly held by an address (use for gas/funding checks).',
+    description:
+      'Get the OST balance held DIRECTLY by one address — the gas/funding check. Takes an omnistar1… address or an account name (a name is resolved to its account address, which is the key address gas is paid from). This is not a portfolio read: it reports one address\'s own OST, so a safe holding cross-chain assets can answer 0 here. For everything an account\'s safes hold, use wallet_assets.',
     inputSchema: {
       type: 'object',
-      properties: { address: { type: 'string', description: 'omnistar1... address' } },
+      properties: {
+        address: {
+          type: 'string',
+          description: 'omnistar1… address, OR an account name (e.g. alice@acme) to resolve.',
+        },
+      },
       required: ['address'],
     },
   },
   {
     name: 'wallet_balances',
-    description: 'Get all OST balances for an address.',
+    description:
+      'Get every coin balance for one address (wallet_balance returns only OST). Takes an omnistar1… address or an account name to resolve.',
     inputSchema: {
       type: 'object',
-      properties: { address: { type: 'string', description: 'omnistar1... address' } },
+      properties: {
+        address: {
+          type: 'string',
+          description: 'omnistar1… address, OR an account name (e.g. alice@acme) to resolve.',
+        },
+      },
       required: ['address'],
     },
   },
   {
     name: 'wallet_account',
-    description: 'Get account number and sequence for an address.',
+    description:
+      'Get account number and sequence for an address. Takes an omnistar1… address or an account name to resolve.',
     inputSchema: {
       type: 'object',
-      properties: { address: { type: 'string', description: 'omnistar1... address' } },
+      properties: {
+        address: {
+          type: 'string',
+          description: 'omnistar1… address, OR an account name (e.g. alice@acme) to resolve.',
+        },
+      },
       required: ['address'],
     },
   },
@@ -477,16 +507,29 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
-        destination: { type: 'string', description: 'Safe address the assets leave from (omnistar1...)' },
+        destination: {
+          type: 'string',
+          description:
+            "The safe the assets leave FROM — an omnistar1… address or a safe NAME (e.g. wikeyMCP_safe). Omit it and, if the account holds exactly one safe, that one is used; with several the call reports a menu to put to the user. Passing an address costs no extra lookup.",
+        },
         asset: { type: 'string', description: 'Asset symbol (e.g. BTC, USDC, OST)' },
         amount: {
           type: ['number', 'string'],
           description:
             'Amount in SMALLEST units (display value × smallCoin). Pass a STRING for large values — wei-scale amounts lose precision as a JSON number. Omit to just ask for maxSuggested.',
         },
+        toName: {
+          type: 'string',
+          description:
+            "Recipient ACCOUNT NAME (e.g. op20). Pass the SAME toName/toSafe/to you will pass to wallet_tx_create_transaction, so the check and the send run off one recipient. Adds `recipient` to the result.",
+        },
+        toSafe: { type: 'string', description: "Which of the recipient's safes (address or safe name), when they have several." },
+        to: { type: 'string', description: 'A LITERAL recipient address, instead of toName — checked for chain-family mismatch too.' },
+        tokenAddress: { type: 'string', description: 'ERC20 contract address (0x + 40 hex) — with `chain`, for an ERC20' },
+        chain: { type: 'string', enum: ['ethereum', 'polygon', 'base'], description: 'ERC20 chain — with `tokenAddress`' },
         account: ACCOUNT_PROP,
       },
-      required: ['destination', 'asset'],
+      required: ['asset'],
     },
   },
   {
@@ -496,8 +539,26 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
-        destination: { type: 'string', description: 'Safe address (omnistar1...)' },
-        to: { type: 'string', description: 'Recipient address' },
+        destination: {
+          type: 'string',
+          description:
+            "The safe the funds leave FROM — an omnistar1… address or a safe NAME (e.g. wikeyMCP_safe). Omit it and, with exactly one safe, that one is used; with several the call REFUSES with a menu to put to the user, because a wrong source is only caught when the wrong safe happens not to hold the asset. Passing an address costs no extra lookup.",
+        },
+        toName: {
+          type: 'string',
+          description:
+            "The recipient's ACCOUNT NAME (e.g. op20) — the preferred way to address a Wikey recipient. Pass it EXACTLY as the user said it: never expand, complete or correct a partial name yourself. A handle is name@organization, the bare \"alice\" does NOT resolve to \"alice@acme\", and the call REFUSES with candidate names to put to the user — completing it silently sends real funds to an account they never named. The server resolves the name to the right chain-native address for this asset, and also REFUSES if the recipient has several safes and `toSafe` did not say which. Mutually exclusive with `to`.",
+        },
+        toSafe: {
+          type: 'string',
+          description:
+            "Which of the recipient's safes to pay, as an address or a safe name. Pass the USER's answer when a call refused with a safe menu — never pick for them.",
+        },
+        to: {
+          type: 'string',
+          description:
+            "A LITERAL recipient address, for a recipient OUTSIDE Wikey (an exchange deposit address, say). Mutually exclusive with `toName`. This must be the CHAIN-NATIVE address for the asset — an omnistar1… safe address is only correct for OST, and sending anything else there loses the funds.",
+        },
         amount: { type: 'number', description: 'Amount in smallest units (display value × smallCoin). Never the full balance of a fee-bearing asset — see wallet_tx_check.' },
         asset: { type: 'string', description: 'Asset symbol (e.g. BTC, USDC, OST)' },
         feePriority: {
@@ -519,7 +580,11 @@ const tools = [
       // feePriority is deliberately NOT required: a required parameter does not
       // produce a question, it produces a guess. The handler refuses instead and
       // returns the menu — see core/feeChoice.ts.
-      required: ['destination', 'to', 'amount', 'asset'],
+      // Neither `to` nor `destination` is required. A schema cannot express
+      // "exactly one of to/toName", and a required `destination` does not
+      // produce a question — it produces a guess at which safe pays. The
+      // handler refuses with the menu instead. Same reasoning as feePriority.
+      required: ['amount', 'asset'],
     },
   },
   {
@@ -716,6 +781,33 @@ const tools = [
     },
   },
   {
+    name: 'wallet_resolve_recipient',
+    description:
+      "Where do I SEND to, for an account NAME? Turns \"transfer 2 BTC to op20\" into the chain-native address `wallet_tx_create_transaction` needs, by walking name → account → safe → that safe's receive address for the asset. READ-ONLY and signing-free: nothing is built, signed or broadcast, and the secure session is never woken. USE THIS, NOT wallet_resolve_name, when the goal is to PAY someone: wallet_resolve_name stops at the account's omnistar1… address, and passing THAT as `to` sends the funds to a wrong-chain address that cannot be recovered — it only happens to work for OST, whose receive address genuinely is the safe's own address. Returns { name, accountAddress, safe:{address,name,nameMatchesAccount}, asset, to, symbolUsed, addressFamily, safeCount, echo } when the answer is unambiguous — relay `echo` to the user before sending. When the account is in SEVERAL safes it returns needsChoice:true with `message` (a ready-to-relay menu) and `safes[]`: ASK THE USER which safe and pass their answer as `safe` — do not pick for them. A safe list is the safes an account PARTICIPATES in, not the ones it owns; the only signal is that <name>_safe is the account's own, which the menu labels. Omit `asset` to see every safe with everything it can receive. For an ERC20, pass `tokenAddress` + `chain`: a token has no receive row of its own and lands at the chain's native-coin address.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description:
+            'The recipient ACCOUNT name (e.g. op20, or alice@acme), EXACTLY as the user gave it — never a completed or corrected version of it. A handle is name@organization and the bare "alice" does NOT resolve to "alice@acme"; when it misses, the call returns candidate names for you to ASK the user about, and picking one yourself pays an account they never named. An omnistar1… account address is also accepted, but then the <name>_safe convention cannot be checked, so the menu can say less. NOT a safe name — the safe of account X is X_safe; name the owner.',
+        },
+        asset: {
+          type: 'string',
+          description: 'Asset symbol being sent (e.g. BTC, OST, USDC). Omit to list every safe with everything it can receive.',
+        },
+        safe: {
+          type: 'string',
+          description: "Which of the recipient's safes, as an address or a safe name. Pass the USER's answer to a needsChoice menu here.",
+        },
+        tokenAddress: { type: 'string', description: 'ERC20 contract address (0x + 40 hex) — for an ERC20, with `chain`' },
+        chain: { type: 'string', enum: ['ethereum', 'polygon', 'base'], description: 'ERC20 chain — for an ERC20, with `tokenAddress`' },
+        account: ACCOUNT_PROP,
+      },
+      required: ['name'],
+    },
+  },
+  {
     name: 'wallet_tx_edit_helpers',
     description:
       'Add/remove recovery helpers and set threshold. Helpers have no safe permissions — recovery only. Helpers are the `allowed_source` of policy-allow-updateUserAddress; call wallet_recovery_helpers FIRST to see the CURRENT helpers (existing/Wikey-added entries already count) before choosing a threshold. `threshold` is passed as an integer COUNT of helpers required, but is stored on-chain as a PERCENTAGE of the total, so adding/removing helpers rescales it (e.g. 1 of 2 helpers = 50%). `addHelpers` takes an account NAME as readily as an address — wallet-cli resolves it server-side, so do NOT hunt for the address first. An unresolvable name aborts the command BEFORE anything is built, signed or broadcast, so a failed add costs nothing on-chain; use wallet_resolve_name first only when you want to confirm the account exists without running a tx at all.',
@@ -905,6 +997,56 @@ interface Deps {
 }
 
 /**
+ * Recipient safe lists, memoized briefly.
+ *
+ * "Send 2 BTC to op20" is three calls about ONE recipient —
+ * wallet_resolve_recipient (or wallet_tx_check) to get the menu, then
+ * create-transaction with the answer — and each would otherwise re-read a
+ * response that is 4.6 MB for a heavy account.
+ *
+ * 60s covers that conversation and deliberately nothing more: safes are not
+ * created often, but a safe created DURING the window must not stay invisible
+ * for longer than it takes to put one question to a user.
+ *
+ * Module-scoped because `dispatch` runs per request. Kept SEPARATE from the B2
+ * snapshot cache on purpose: ingesting a third party's snapshot there would
+ * evict the user's own index (see wallet_snapshot).
+ */
+const RECIPIENT_TTL_MS = 60_000;
+const recipientMemo = new Map<string, { at: number; safes: RecipientSafe[] }>();
+
+/** Everything a recipient answer carries, refused or not (see resolveRecipient). */
+interface RecipientBase {
+  name: string;
+  accountAddress: string;
+  safeCount: number;
+}
+interface RecipientRefused extends RecipientBase {
+  ok: false;
+  kind: string;
+  message: string;
+  /** The menu, when the refusal is a choice. */
+  safes?: SafeChoice[] | undefined;
+  /** The chosen safe, when the refusal happened after choosing one. */
+  safe?: SafeChoice | undefined;
+  canReceive?: string[] | undefined;
+  /** Near-miss local account names, when the name itself did not resolve. */
+  candidates?: NameCandidate[] | undefined;
+}
+interface RecipientResolved extends RecipientBase {
+  ok: true;
+  safe: SafeChoice;
+  echo: string;
+  warning?: string | undefined;
+  /** Absent when no asset was named — then this is an inventory answer. */
+  asset?: string | undefined;
+  to?: string | undefined;
+  symbolUsed?: string | undefined;
+  addressFamily?: string | undefined;
+}
+type RecipientAnswer = RecipientResolved | RecipientRefused;
+
+/**
  * The two signing verbs the gateway passkey flow needs, bound to one account.
  * Shared by login / api_call / mcp_call so all three sign as the same key they
  * resolve the safe from — see the note at wallet_gateway_login.
@@ -986,23 +1128,121 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     });
   };
 
-  // The address whose helpers to read, from a name. A LOCAL account's own name
-  // is answered from the keystore listing — free, and the common case — before
-  // falling back to the probe, which is what covers an account this machine
-  // holds no key for (the lost-key user, whose name is their only handle).
-  const resolveHelperTarget = async (asked: string, requested: unknown): Promise<string> => {
+  // Name → address, cheapest route first. A LOCAL account's own name is answered
+  // from the keystore listing — free, and the common case — before falling back
+  // to the probe, which is what covers an account this machine holds no key for
+  // (the lost-key user, or any third-party recipient).
+  //
+  // Shared by every by-name path so they cannot disagree about what a name
+  // means; each caller wraps the failure in its own wording, because "could not
+  // resolve" needs to say something different about a helper than about a
+  // payee. Note wallet_resolve_name does NOT come through here — it is the
+  // deliberate probe, and answering it from the keystore would report an
+  // account exists on-chain without having checked.
+  //
+  // ASSUMPTION, and exactly where it stops holding. The two routes answer to
+  // different authorities: the local shortcut reads the name off the CHAIN
+  // profile of a key this machine holds, while the probe asks the directory,
+  // which is the one place a name maps to a single current address. RECOVERY is
+  // what pulls those apart — it mints a NEW address and leaves the NAME alone,
+  // so the chain ends up carrying one name on two or more accounts while the
+  // directory carries only the active one.
+  //
+  // In the flows that actually occur the two agree. The machine that performed
+  // the recovery holds only the new key — recovery is refused for an account
+  // already in the list, so the retired key is never sitting beside it to
+  // compete — and a machine holding no key for that name falls through to the
+  // probe. They diverge on a machine still holding the SUPERSEDED key after a
+  // recovery done elsewhere: that key's chain profile still carries the name, so
+  // the local match wins and this returns the retired address without ever
+  // asking the directory.
+  //
+  // Left as-is deliberately (2026-08-20). The probe is a wallet-cli spawn with
+  // 30s/60s timeouts; paying that on every by-name read to cover a cross-machine
+  // case is the worse trade, and on the signing paths it would not even help —
+  // a machine that holds only the old key cannot sign as the new address
+  // whatever we resolve to. The read tools echo the address they resolved to, so
+  // the choice is inspectable in the response even though it is made silently.
+  //
+  // Second, narrower gap, unrelated to recovery: with several local accounts
+  // sharing one name, `.find` takes the first in keystore order, arbitrarily.
+  const localOrChainAddress = async (asked: string, requested: unknown): Promise<string> => {
     const local = (await listAccounts(query, listKeystoreAddresses)).find(
       (a) => a.name && a.name.toLowerCase() === asked.toLowerCase(),
     );
     if (local) return local.address;
+    return (await resolveName(asked, requested)).address;
+  };
+
+  // The address whose helpers to read, from a name.
+  const resolveHelperTarget = async (asked: string, requested: unknown): Promise<string> => {
     try {
-      return (await resolveName(asked, requested)).address;
+      return await localOrChainAddress(asked, requested);
     } catch (e) {
       throw new Error(
         `"${asked}" could not be resolved to an account address, so its recovery helpers cannot be ` +
           `read. This is reported as an error on purpose: wallet-cli's \`query helpers\` accepts an ` +
           `ADDRESS only, and would answer a name with an empty helper list that reads as "this ` +
           `account has no helpers". Underlying error: ${(e as Error).message}`,
+      );
+    }
+  };
+
+  // The subject of a plain chain read (`query balance|balances|account`),
+  // settled to an address from either spelling of the parameter.
+  //
+  // Two distinct mistakes were reachable here and NEITHER said what was wrong.
+  // Every other tool on this server names this parameter `account` and accepts a
+  // NAME in it, so a caller following the house convention passes `account` to
+  // these three — `input.address` is then undefined, and `String(undefined)`
+  // forwards the literal text "undefined" as --address. An account NAME passed
+  // as `address` is forwarded just as literally. Both arrive at cosmjs as a
+  // non-bech32 string and come back as "decoding bech32 failed: invalid
+  // separator index -1", which names neither the tool, the parameter, nor the
+  // value — the failure is indistinguishable from a chain problem.
+  //
+  // So: accept both spellings, resolve a name the way wallet_recovery_helpers
+  // does, and never stringify undefined into an argument. `account` stays
+  // undeclared in the schemas, the same way `signingKey` does above — the
+  // advertised name is `address`, and the fallback only rescues a caller who
+  // reached for the convention the other tools taught them.
+  const queryTarget = async (i: Record<string, unknown>, tool: string): Promise<string> => {
+    const viaAddress = i.address == null ? '' : String(i.address).trim();
+    const asked = viaAddress || (i.account == null ? '' : String(i.account).trim());
+    if (!asked) {
+      throw new Error(
+        `${tool} requires \`address\` — an omnistar1… address or an account name (e.g. alice@acme). ` +
+          `Call wallet_accounts to list this machine's accounts.`,
+      );
+    }
+    if (isChainAddress(asked)) return asked;
+
+    // A NAME. When `account` is what supplied it, that name is the SUBJECT of
+    // the read, not the actor performing it — forwarding it as the actor would
+    // fail a third party's name with "not a signing key on this machine". The
+    // on-chain probe runs as this machine's own key in that case.
+    //
+    // It resolves to an ACCOUNT address — the key address gas is paid from —
+    // never a safe. For an account that has been RECOVERED, see the assumption
+    // documented on localOrChainAddress: the name survives recovery unchanged
+    // while the address moves, and on a machine still holding the retired key
+    // the local shortcut can answer with that address. wallet-cli echoes
+    // whichever address was queried, so a caller checking gas can see which one
+    // it got; pass the address outright when it has to be a specific one.
+    try {
+      return await localOrChainAddress(asked, viaAddress ? accountOf(i) : undefined);
+    } catch (e) {
+      // TWO different failures, and they must not wear the same message. "Which
+      // of your keys should probe this name?" is not "that name does not exist"
+      // — the first is answerable by passing `account`, the second is not. The
+      // resolver already asks the right question in the right words, so it
+      // passes through untouched rather than being buried under a wrapper that
+      // blames the name.
+      if (e instanceof AccountResolutionError) throw e;
+      throw new Error(
+        `"${asked}" could not be resolved to an account address, so ${tool} has nothing to query. ` +
+          `Pass an omnistar1… address, or an account name that exists on-chain. ` +
+          `Underlying error: ${(e as Error).message}`,
       );
     }
   };
@@ -1032,6 +1272,169 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       asset,
       amount,
     });
+  };
+
+  /**
+   * WHICH SAFE THE MONEY LEAVES FROM (`--destination`).
+   *
+   * Not merely a convenience. `destination` is required today and the agent
+   * typically infers it from wallet_assets; a wrong guess is caught ONLY when
+   * the wrong safe happens not to hold the asset (R1). When two safes both hold
+   * BTC, nothing catches it and the transfer succeeds from the wrong source —
+   * quietly debiting, say, an organization's safe instead of the user's own.
+   *
+   * FAST PATH FIRST: an omnistar address is passed straight through, with no
+   * read at all. Only a safe NAME, or an omitted destination, pays for the safe
+   * list — so this cannot slow down a call that works today.
+   */
+  const resolveSourceSafe = async (i: {
+    destination?: unknown;
+    asset?: string | undefined;
+    account?: unknown;
+  }): Promise<
+    { ok: true; address: string } | { ok: false; kind: string; message: string; safes?: SafeChoice[] }
+  > => {
+    const asked = String(i.destination ?? '').trim();
+    if (asked && isChainAddress(asked)) return { ok: true, address: asked };
+
+    const accountAddress = await resolveAccountAddress(query, listKeystoreAddresses, i.account);
+    const accountName =
+      (await listAccounts(query, listKeystoreAddresses)).find((a) => a.address === accountAddress)?.name ?? '';
+    const picked = pickRecipientSafe({
+      safes: await readRecipientSafes(accountAddress),
+      accountName,
+      requested: asked || undefined,
+      asset: i.asset,
+      role: 'source',
+    });
+    if (!picked.ok) return { ok: false, kind: picked.kind, message: picked.message, safes: picked.safes };
+    return { ok: true, address: picked.safe.address };
+  };
+
+  /**
+   * The `--to` a transfer will ACTUALLY use, from either a literal address or a
+   * recipient NAME.
+   *
+   * Shared by wallet_tx_check and wallet_tx_create_transaction on purpose: if
+   * the pre-flight resolved a name differently from the broadcast, the agent
+   * would check one recipient and pay another. One function, one answer.
+   *
+   * Runs before anything signs or wakes SSP, so an unknown name, an ambiguous
+   * safe or a wrong-chain address fails while the call is still free.
+   */
+  const resolveSendTarget = async (i: {
+    to?: unknown;
+    toName?: unknown;
+    toSafe?: unknown;
+    asset: string;
+    destination: string;
+    chain?: string | undefined;
+    tokenAddress?: string | undefined;
+    account?: unknown;
+  }): Promise<
+    | { ok: true; to: string; resolvedFrom?: Record<string, unknown> }
+    | { ok: false; kind: string; message: string; safes?: SafeChoice[]; candidates?: NameCandidate[] }
+  > => {
+    const literal = String(i.to ?? '').trim();
+    const named = String(i.toName ?? '').trim();
+
+    if (literal && named) {
+      return {
+        ok: false,
+        kind: 'to-and-toName',
+        message:
+          `Pass EITHER \`to\` (a literal recipient address) OR \`toName\` (an account name), not both — ` +
+          `they can disagree, and only one of them can be right. Got to="${literal}" and toName="${named}".`,
+      };
+    }
+    if (!literal && !named) {
+      return {
+        ok: false,
+        kind: 'no-recipient',
+        message:
+          `No recipient: pass \`toName\` with the recipient's account name (recommended — it resolves ` +
+          `to the right chain-native address for ${i.asset.toUpperCase()}), or \`to\` with a literal ` +
+          `address if the recipient is outside Wikey.`,
+      };
+    }
+
+    let to = literal;
+    let resolvedFrom: Record<string, unknown> | undefined;
+    let resolvedSafe: SafeChoice | undefined;
+
+    if (named) {
+      const r = await resolveRecipient({
+        name: named,
+        asset: i.asset,
+        safe: i.toSafe === undefined ? undefined : String(i.toSafe),
+        chain: i.chain,
+        tokenAddress: i.tokenAddress,
+        account: i.account,
+      });
+      if (!r.ok)
+        return {
+          ok: false,
+          kind: r.kind,
+          message: r.message,
+          safes: r.safes,
+          ...(r.candidates ? { candidates: r.candidates } : {}),
+        };
+      // `to` is set whenever an asset was named, and a transfer always names
+      // one — so this cannot fire. It is here because the alternative to a
+      // guard is `String(undefined)`, which would put the literal text
+      // "undefined" on a broadcast.
+      if (!r.to) {
+        return {
+          ok: false,
+          kind: 'no-receive-address',
+          message:
+            `Resolved "${named}" to safe ${r.safe.name || r.safe.address}, but no receive address for ` +
+            `${i.asset.toUpperCase()} came back with it. Do not retry blindly — report this.`,
+        };
+      }
+      to = r.to;
+      resolvedSafe = r.safe;
+      resolvedFrom = {
+        name: r.name,
+        accountAddress: r.accountAddress,
+        safe: { address: r.safe.address, name: r.safe.name, nameMatchesAccount: r.safe.nameMatchesAccount },
+        to,
+        echo: r.echo,
+        ...(r.warning ? { warning: r.warning } : {}),
+      };
+    }
+
+    // G1 applies to a LITERAL `to` as well, not just a resolved one — a hand-
+    // typed omnistar address is exactly the mistake this guard exists for.
+    // Open-world: it only fires when both families are known and disagree, so
+    // it can never refuse a send that works today. No override.
+    const family = checkAddressFamily(i.asset, to, { chain: i.chain, tokenAddress: i.tokenAddress });
+    if (!family.ok) return { ok: false, kind: family.kind, message: family.message };
+
+    // G3, with what is free. A resolved safe that IS the source safe is a
+    // self-send whatever the asset; for a literal address we can only compare
+    // against the source safe's own address, which catches the OST case (where
+    // the receive address IS the safe address) but not a hand-typed BTC address
+    // belonging to the same safe. Confirming that would cost a snapshot read on
+    // every send, and the stake here is a wasted fee, not lost funds.
+    if (resolvedSafe && resolvedSafe.address.toLowerCase() === i.destination.trim().toLowerCase()) {
+      return {
+        ok: false,
+        kind: 'self-send',
+        message:
+          `Refusing: "${named}" resolves to ${resolvedSafe.name || resolvedSafe.address}, which IS the ` +
+          `safe the funds would leave from. The transfer would pay a fee to move ${i.asset.toUpperCase()} ` +
+          `nowhere. Check whether the source safe (destination) or the recipient is wrong.`,
+      };
+    }
+    const self = checkSelfSend({
+      to,
+      sourceSafe: { address: i.destination.trim(), name: '', assets: [] },
+      asset: i.asset,
+    });
+    if (!self.ok) return { ok: false, kind: self.kind, message: self.message };
+
+    return { ok: true, to, ...(resolvedFrom ? { resolvedFrom } : {}) };
   };
 
   // Read a config value via the wallet-cli read runner (reads are never locked).
@@ -1073,6 +1476,161 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       );
     }
     return { snapshotUrl, apiServerUrl, apiKey };
+  };
+
+  // Narrower than assetDeps on purpose. A recipient read prices NOTHING, so
+  // demanding apiServerUrl/apiKey would fail a call that never uses them — and
+  // no credential of ours should leave the process for a public read.
+  const snapshotDeps = async () => {
+    const snapshotUrl = await cfgGet('snapshotUrl');
+    if (!snapshotUrl) {
+      throw new Error(
+        `Cannot read safes: wallet-cli config is missing snapshotUrl. ` +
+          `Run wallet_config_show to inspect it.`,
+      );
+    }
+    return { snapshotUrl };
+  };
+
+  const readRecipientSafes = async (accountAddress: string): Promise<RecipientSafe[]> => {
+    const hit = recipientMemo.get(accountAddress);
+    if (hit && Date.now() - hit.at < RECIPIENT_TTL_MS) return hit.safes;
+    const safes = await fetchRecipientSafes(await snapshotDeps(), accountAddress);
+    recipientMemo.set(accountAddress, { at: Date.now(), safes });
+    return safes;
+  };
+
+  /**
+   * "op20" → the chain-native address to put in `--to`.
+   *
+   * Three links: name → account address (wallet-cli's resolver, or the keystore
+   * when it is a local account), account → its safes, safe → the receive address
+   * for this asset. Read-only and signing-free the whole way: nothing here wakes
+   * SSP, so an unknown name or an ambiguous safe fails while the call is free.
+   *
+   * Returns a refusal rather than throwing, because the two callers need
+   * opposite things from it — wallet_resolve_recipient RETURNS the menu (an
+   * agent exploring on the user's behalf should not have to catch an error to
+   * see a list), while the signing path turns it into one.
+   */
+  const resolveRecipient = async (i: {
+    name: string;
+    asset?: string | undefined;
+    safe?: string | undefined;
+    chain?: string | undefined;
+    tokenAddress?: string | undefined;
+    account?: unknown;
+  }): Promise<RecipientAnswer> => {
+    const asked = String(i.name ?? '').trim();
+    if (!asked) throw new Error('wallet_resolve_recipient requires `name` — the recipient account name.');
+
+    // An address passed where a name was expected is accepted and used as-is,
+    // the way wallet_resolve_name does. The naming convention cannot be applied
+    // then (we never learn the account's name), so the menu says so instead of
+    // implying that none of the safes are theirs.
+    const isAddress = isChainAddress(asked);
+    let accountAddress: string;
+    try {
+      accountAddress = isAddress ? asked : await localOrChainAddress(asked, i.account);
+    } catch (e) {
+      // TWO different failures, and they must not wear the same message. "Which
+      // of your keys is asking?" is not "your recipient does not exist" — on
+      // that path the name was never looked up at all, because wallet-cli's
+      // resolver runs AS an account and there were several to choose from.
+      // Reporting it as an unknown recipient sends the user hunting for a typo
+      // in a name that is very probably correct.
+      if (e instanceof AccountResolutionError) {
+        throw new Error(
+          `Cannot look up "${asked}" yet: resolving a name runs as one of YOUR accounts, and the ` +
+            `call did not say which to use. This says nothing about whether "${asked}" exists — ` +
+            `pass \`account\` and try again.\n${(e as Error).message}`,
+        );
+      }
+      // G8. A name that did not resolve is a REFUSAL WITH CANDIDATES, not a bare
+      // error — because a bare error is what makes an agent complete the handle
+      // itself. Users say `sponsorTest2`; the account is
+      // `sponsorTest2@organization_xyz`; the resolver rejects the short form. On
+      // 2026-08-20 an agent bridged that gap on its own and moved real funds,
+      // telling the user only afterwards. The candidates are offered so the
+      // question can be asked, and the refusal stands so it MUST be.
+      const refusal = unknownNameRefusal({
+        asked,
+        candidates: suggestAccountNames(asked, await listAccounts(query, listKeystoreAddresses)),
+        underlying: (e as Error).message,
+      });
+      return { ...refusal, name: asked, accountAddress: '', safeCount: 0 };
+    }
+
+    const safes = await readRecipientSafes(accountAddress);
+    const accountName = isAddress ? '' : asked;
+    const picked = pickRecipientSafe({
+      safes,
+      accountName,
+      requested: i.safe,
+      asset: i.asset,
+    });
+
+    const base = { name: asked, accountAddress, safeCount: safes.length };
+    if (!picked.ok) {
+      return { ok: false as const, ...base, kind: picked.kind, message: picked.message, safes: picked.safes };
+    }
+
+    const safe = picked.choice;
+    const echoTail = (to?: string) =>
+      `${asked} → account ${accountAddress} → safe ${safe.name || safe.address} (${safe.address})` +
+      (to ? ` → ${String(i.asset).toUpperCase()} ${to}` : '');
+
+    // Decision 1: a lone safe is used without asking, and the ECHO carries the
+    // warning — a single safe is not automatically THEIR safe, it may be a
+    // shared one, and that is the only thing the data can actually prove.
+    const warning =
+      safes.length === 1 && !safe.nameMatchesAccount && !isAddress
+        ? `${asked}'s only safe is "${safe.name}", which is NOT ${asked}_safe — so it is probably a ` +
+          `SHARED safe that ${asked} is merely a member of, not their own. Say so before sending.`
+        : undefined;
+
+    if (!i.asset) {
+      return {
+        ok: true as const,
+        ...base,
+        safe,
+        echo: echoTail(),
+        ...(warning ? { warning } : {}),
+      };
+    }
+
+    const address = pickReceiveAddress({
+      safe: picked.safe,
+      asset: i.asset,
+      chain: i.chain,
+      tokenAddress: i.tokenAddress,
+    });
+    if (!address.ok) {
+      return { ok: false as const, ...base, kind: address.kind, message: address.message, safe, canReceive: address.canReceive };
+    }
+
+    // G1 against an address we derived ourselves. It should never fire — and
+    // that is exactly why it runs: if it ever does, the receive table and the
+    // family table disagree, which is worth failing over rather than sending.
+    const family = checkAddressFamily(i.asset, address.to, {
+      chain: i.chain,
+      tokenAddress: i.tokenAddress,
+    });
+    if (!family.ok) {
+      return { ok: false as const, ...base, kind: family.kind, message: family.message, safe };
+    }
+
+    return {
+      ok: true as const,
+      ...base,
+      safe,
+      asset: i.asset.toUpperCase(),
+      to: address.to,
+      symbolUsed: address.symbolUsed,
+      addressFamily: addressFamily(address.to),
+      echo: echoTail(address.to),
+      ...(warning ? { warning } : {}),
+    };
   };
 
   // Tool-arg amount → smallest units. Accepts a string so wei-scale values
@@ -1121,12 +1679,15 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
     // ── reads ──
     case 'wallet_chain_info':
       return query(['query', 'chain-info']);
+    // All three settle their target through queryTarget: `--address` takes an
+    // address only, and a missing or name-shaped value used to be stringified
+    // straight into the flag. See the helper for what that produced.
     case 'wallet_balance':
-      return query(['query', 'balance', '--address', String(input.address)]);
+      return query(['query', 'balance', '--address', await queryTarget(input, 'wallet_balance')]);
     case 'wallet_balances':
-      return query(['query', 'balances', '--address', String(input.address)]);
+      return query(['query', 'balances', '--address', await queryTarget(input, 'wallet_balances')]);
     case 'wallet_account':
-      return query(['query', 'account', '--address', String(input.address)]);
+      return query(['query', 'account', '--address', await queryTarget(input, 'wallet_account')]);
     case 'wallet_profile': {
       const args = ['query', 'profile'];
       if (input.address) args.push('--address', String(input.address));
@@ -1412,18 +1973,95 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // send-everything request (asking 0 exercises the same ladder and leaves
       // maxSuggested as the answer).
       const amount = input.amount === undefined ? BigInt(0) : amountArg(input.amount);
-      const verdict = await feasibility(input, amount);
+
+      // The SOURCE half. Settled before the balance read, because the balance
+      // read is *about* this safe — checking the wrong one answers the wrong
+      // question. Reported as data, like the recipient: this tool never throws
+      // a choice at the caller.
+      const source = await resolveSourceSafe({
+        destination: input.destination,
+        asset: String(input.asset ?? ''),
+        account: accountOf(input),
+      });
+      if (!source.ok) {
+        return { source, feeChoice: buildFeeChoice(String(input.asset ?? ''), undefined) };
+      }
+      const verdict = await feasibility({ ...input, destination: source.address }, amount);
+
+      // The RECIPIENT half of the pre-flight, when the caller named one. This is
+      // the free place to find a wrong-chain address, an ambiguous safe or a
+      // self-send — the alternative is finding them at broadcast, with money
+      // already committed. Reported as data rather than thrown: a menu is an
+      // answer here, not an error, and the balance verdict is still worth
+      // seeing alongside it.
+      const wantsRecipient = input.to !== undefined || input.toName !== undefined;
+      const recipient = wantsRecipient
+        ? await resolveSendTarget({
+            to: input.to,
+            toName: input.toName,
+            toSafe: input.toSafe,
+            asset: String(input.asset ?? ''),
+            destination: source.address,
+            chain: input.chain === undefined ? undefined : String(input.chain),
+            tokenAddress: input.tokenAddress === undefined ? undefined : String(input.tokenAddress),
+            account: accountOf(input),
+          })
+        : undefined;
+
       // The fee menu rides along with the pre-flight the agent already has to
       // call: same read, no extra round-trip, and it arrives at exactly the
       // moment the choice has to be put to the user. Priced by the coin that
       // actually pays — for a token that is its chain's gas coin, not the token.
-      return { ...verdict, feeChoice: buildFeeChoice(verdict.asset, verdict.gasAsset?.symbol) };
+      return {
+        ...verdict,
+        feeChoice: buildFeeChoice(verdict.asset, verdict.gasAsset?.symbol),
+        ...(recipient ? { recipient } : {}),
+        ...(String(input.destination ?? '').trim() === source.address ? {} : { source }),
+      };
     }
     case 'wallet_tx_create_transaction': {
-      const { destination, to, amount, asset, feePriority, tokenAddress, chain, smallCoin } = input as {
-        destination: string; to: string; amount: number; asset: string; feePriority?: unknown;
+      const { amount, asset, feePriority, tokenAddress, chain, smallCoin } = input as {
+        amount: number; asset: string; feePriority?: unknown;
         tokenAddress?: string; chain?: string; smallCoin?: number;
       };
+
+      // WHICH SAFE PAYS. First, because both the self-send guard and the balance
+      // read are about this safe — and because a wrong source is not caught
+      // downstream when the wrong safe also holds the asset.
+      const source = await resolveSourceSafe({
+        destination: input.destination,
+        asset: String(asset ?? ''),
+        account: accountOf(input),
+      });
+      if (!source.ok) {
+        throw new Error(
+          source.kind === 'needs-choice' ? source.message : `Refusing to broadcast — ${source.kind}.\n${source.message}`,
+        );
+      }
+      const destination = source.address;
+
+      // Then WHO IS PAID. Still before the feasibility read and long before
+      // anything signs, so an unknown name, an ambiguous safe or a wrong-chain
+      // address costs nothing. Unlike wallet_tx_check, this path REFUSES rather
+      // than reporting — past here money moves.
+      const target = await resolveSendTarget({
+        to: input.to,
+        toName: input.toName,
+        toSafe: input.toSafe,
+        asset: String(asset ?? ''),
+        destination,
+        chain,
+        tokenAddress,
+        account: accountOf(input),
+      });
+      if (!target.ok) {
+        throw new Error(
+          target.kind === 'needs-choice'
+            ? target.message
+            : `Refusing to broadcast — ${target.kind}.\n${target.message}`,
+        );
+      }
+      const to = target.to;
 
       // PRECONDITION, not advice. The description already told the model the
       // amount is in smallest units and it still passed the whole balance — a
@@ -1431,7 +2069,7 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // check runs here and REFUSES, in the same shape as the no-default-account
       // refusal: hand back the numbers needed to retry rather than guessing an
       // amount on the user's behalf.
-      const verdict = await feasibility(input, amountArg(amount));
+      const verdict = await feasibility({ ...input, destination }, amountArg(amount));
       if (verdict.verdict === 'will-fail' || (verdict.verdict === 'at-risk' && input.acknowledgeRisk !== true)) {
         const how =
           verdict.verdict === 'at-risk'
@@ -1484,7 +2122,21 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       args.push('--broadcast');
       const a = await acct(accountOf(input));
       args.push(...signerArgsFor(a));
-      return session.signPrompted(a, args, []);
+      const broadcast = await session.signPrompted(a, args, []);
+
+      // G7. When a NAME was resolved, hand back the whole chain — name →
+      // account → safe → address — so the agent can state where the money
+      // actually went. A literal `to` keeps the bare wallet-cli output it has
+      // always returned.
+      const named = target.resolvedFrom !== undefined;
+      const sourceResolved = String(input.destination ?? '').trim() !== destination;
+      return named || sourceResolved
+        ? {
+            broadcast,
+            ...(target.resolvedFrom ? { resolvedFrom: target.resolvedFrom } : {}),
+            ...(sourceResolved ? { sentFrom: destination } : {}),
+          }
+        : broadcast;
     }
     case 'wallet_tx_vote': {
       const a = await acct(accountOf(input));
@@ -1673,6 +2325,25 @@ async function dispatch(deps: Deps, name: string, input: Record<string, unknown>
       // that cannot be resolved is an error rather than an empty helper list.
       const address = await resolveHelperTarget(asked, accountOf(input));
       return query(['query', 'helpers', '--address', address]);
+    }
+    case 'wallet_resolve_recipient': {
+      // Refusals come back as DATA here, never as an error: enumerating the
+      // safes IS this tool's job, and an agent should not have to catch an
+      // exception to see a list. The signing paths convert the same value into
+      // a refusal — see wallet_tx_create_transaction.
+      const r = await resolveRecipient({
+        name: String(input.name ?? ''),
+        asset: input.asset === undefined ? undefined : String(input.asset),
+        safe: input.safe === undefined ? undefined : String(input.safe),
+        chain: input.chain === undefined ? undefined : String(input.chain),
+        tokenAddress: input.tokenAddress === undefined ? undefined : String(input.tokenAddress),
+        account: accountOf(input),
+      });
+      if (r.ok) return { ...r, needsChoice: false };
+      // `unknown-name` sets it too: an agent that already branches on
+      // needsChoice to put a question to the user must take that branch here,
+      // which is the whole point of returning candidates instead of guessing.
+      return { ...r, needsChoice: r.kind === 'needs-choice' || r.kind === 'unknown-name' };
     }
     case 'wallet_resolve_name': {
       const asked = String(input.name ?? '').trim();

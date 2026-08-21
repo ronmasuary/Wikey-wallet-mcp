@@ -15,6 +15,7 @@ export * from './onboardSponsor.js';
 export * from './recoveryDeeplink.js';
 export * from './txFeasibility.js';
 export * from './assetInfo.js';
+export * from './recipient.js';
 export * from './feeChoice.js';
 export * from './recoveryRequests.js';
 export * from './rotation.js';

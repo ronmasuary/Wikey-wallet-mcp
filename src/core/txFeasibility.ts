@@ -268,6 +268,20 @@ export function findAsset(assets: AssetInfo[], symbol: string): AssetInfo | unde
 }
 
 /**
+ * A chain's native coin, from the name the chain goes by (`--chain ethereum`,
+ * or `layer2data.chain`).
+ *
+ * ONE table, two correct readings. It is the coin that PAYS that chain's gas —
+ * what `gasSymbolFor` uses it for. It is ALSO the coin whose receive address a
+ * token on that chain lands at: an ERC20 has no receive row of its own, so a
+ * USDC transfer on Polygon is addressed to the safe's POL address. The recipient
+ * resolver (core/recipient.ts) reads it the second way.
+ */
+export function nativeCoinForChain(chain: string): string | null {
+  return TOKEN_GAS[(chain ?? '').trim().toUpperCase()] ?? null;
+}
+
+/**
  * Is this a token whose fee is paid in a DIFFERENT coin? Exported so a narrowed
  * fetch can tell whether it still owes a second request for the gas coin: R4
  * reads the gas balance, so narrowing to the sent asset ALONE would silently
@@ -276,8 +290,7 @@ export function findAsset(assets: AssetInfo[], symbol: string): AssetInfo | unde
 export function gasSymbolFor(asset: AssetInfo): string | null {
   const l2 = asset.layer2data;
   if (!l2 || !l2.contractAddress) return null;
-  const chain = (l2.chain ?? '').trim().toUpperCase();
-  return TOKEN_GAS[chain] ?? null;
+  return nativeCoinForChain(l2.chain ?? '');
 }
 
 /**

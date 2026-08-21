@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchSafeAssets, fetchPortfolio, type AssetInfoDeps, type FetchLike } from '../src/core/assetInfo.js';
+import { readFileSync } from 'node:fs';
+import {
+  fetchSafeAssets,
+  fetchPortfolio,
+  fetchRecipientSafes,
+  type AssetInfoDeps,
+  type SnapshotDeps,
+  type FetchLike,
+} from '../src/core/assetInfo.js';
 
 const SAFE = 'omnistar1safe000000000000000000000000000000000';
 const ADDR = 'omnistar1key0000000000000000000000000000000000';
@@ -399,4 +407,163 @@ test('the pricing request carries the safe address and the configured endpoint',
   assert.equal(post.safeAddress, SAFE);
   assert.equal(post.url, 'https://proxy.test/mainnet/proxy/api/assets/');
   assert.match(calls[0]!.url, /\/mainnet\/node\/snapshot\/client\?env=main&publickey=/);
+});
+
+// ─── Recipient safes: the read behind "transfer 2 BTC to op20" ──────────────
+//
+// The fixture is the RAW /snapshot/client top-level array — five safes, all
+// isMain:true, one named after the account — modelled on the live op20 response
+// of 2026-08-17 with fabricated but FORMAT-VALID addresses (real bech32/hex/
+// base58 shapes, so the address-family guard can be tested against it).
+//
+// It is deliberately NOT tests/fixtures/snapshot-fixture.json, which is the
+// wallet-cli `{success, data}` envelope: this module parses the HTTP body.
+
+const RECIPIENT_FIXTURE = readFileSync(
+  new URL('./fixtures/recipient-snapshot.json', import.meta.url),
+  'utf8',
+);
+
+const OP20_SAFE = 'omnistar1g7f4k2m9x3vd8w0s5jn6h2ce4mua7lqp8hall4';
+
+interface SnapReq {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * An endpoint that serves ONE snapshot body — and nothing else. The deps are
+ * typed `SnapshotDeps`, so this stub cannot supply an apiServerUrl or an
+ * apiKey: if the recipient path ever grew a pricing call, this would not compile.
+ */
+function snapshotStub(body: string, ok = true): { deps: SnapshotDeps; reqs: SnapReq[] } {
+  const reqs: SnapReq[] = [];
+  const fetchImpl: FetchLike = async (url, init) => {
+    const i = (init ?? {}) as { method?: string; headers?: Record<string, string> };
+    reqs.push({ url, method: i.method ?? 'GET', headers: i.headers ?? {} });
+    return {
+      ok,
+      status: ok ? 200 : 502,
+      statusText: ok ? 'OK' : 'Bad Gateway',
+      text: async () => body,
+    };
+  };
+  return { reqs, deps: { snapshotUrl: 'https://proxy.test/mainnet/node', fetchImpl } };
+}
+
+test('every safe comes back with its name and its receive addresses', async () => {
+  const { deps } = snapshotStub(RECIPIENT_FIXTURE);
+
+  const safes = await fetchRecipientSafes(deps, ADDR);
+
+  assert.deepEqual(
+    safes.map((s) => s.name),
+    ['op20_safe', 'treasury_safe', 'treasuryAcc_safe', 'trExecutor_safe', 'createTest3_safe'],
+    'names — which the account profile does NOT carry, and a menu cannot be built without',
+  );
+  assert.equal(safes[0]!.address, OP20_SAFE);
+  // Carried through verbatim — epoch millis in a string, as the endpoint
+  // reports it (confirmed live 2026-08-19). Formatting is the menu's job.
+  assert.equal(safes[0]!.lastActive, '1769591640000');
+  assert.equal(
+    safes[0]!.assets.find((a) => a.symbol === 'BTC')!.address,
+    'bc1qg7f4k2m9x3vd8w0s5jn6h2ce4mua7lqp9tnpga',
+  );
+});
+
+test("OST's receive address IS the safe's own address — every other asset's is not", async () => {
+  // The trap this whole feature exists to avoid. Passing the safe address as
+  // --to PASSES an OST test and loses money on the first BTC transfer, because
+  // wallet-cli does not validate --to (it is declared `string`, not `address`).
+  const { deps } = snapshotStub(RECIPIENT_FIXTURE);
+
+  const safes = await fetchRecipientSafes(deps, ADDR);
+
+  for (const safe of safes) {
+    const ost = safe.assets.find((a) => a.symbol === 'OST');
+    assert.equal(ost!.address, safe.address, `${safe.name}: OST is received at the safe address`);
+
+    const btc = safe.assets.find((a) => a.symbol === 'BTC');
+    if (btc) {
+      assert.notEqual(btc.address, safe.address, `${safe.name}: BTC is NOT`);
+      assert.equal(
+        btc.address.slice(4, 36),
+        safe.address.slice(9, 41),
+        `${safe.name}: …yet shares a data part, which is why a wrong --to looks plausible`,
+      );
+    }
+  }
+});
+
+test('a recipient read prices NOTHING and sends no api-key', async () => {
+  // A recipient needs an address, not a balance. Pricing would also be the slow
+  // part: the endpoint that times out is /api/assets/, which this never calls.
+  const { deps, reqs } = snapshotStub(RECIPIENT_FIXTURE);
+
+  await fetchRecipientSafes(deps, ADDR);
+
+  assert.equal(reqs.length, 1, 'one request, total');
+  assert.equal(reqs[0]!.method, 'GET');
+  assert.match(reqs[0]!.url, /\/mainnet\/node\/snapshot\/client\?env=main&publickey=/);
+  assert.ok(!('api-key' in reqs[0]!.headers), 'no credential leaves the process for a public read');
+});
+
+test('both names of an aliased coin survive to the recipient list', async () => {
+  // The pricing path DEDUPES MATIC/POL, because two names for one coin would
+  // show a duplicate balance. A receive address is not a balance: dropping one
+  // label here would make a send addressed to the dropped symbol unresolvable.
+  const { deps } = snapshotStub(RECIPIENT_FIXTURE);
+
+  const symbols = (await fetchRecipientSafes(deps, ADDR))[0]!.assets.map((a) => a.symbol);
+
+  assert.ok(symbols.includes('MATIC') && symbols.includes('POL'), 'both labels kept');
+});
+
+test('a row naming no address is dropped rather than offered as a destination', async () => {
+  const { deps } = snapshotStub(
+    JSON.stringify([
+      {
+        name: 'x_safe',
+        address: 'omnistar1x',
+        assets: { assets: [{ symbol: 'BTC', address: '' }, { symbol: 'OST', address: 'omnistar1x' }] },
+      },
+    ]),
+  );
+
+  const safes = await fetchRecipientSafes(deps, ADDR);
+  assert.deepEqual(safes[0]!.assets.map((a) => a.symbol), ['OST']);
+});
+
+// ─── "No safes" and "could not read" are opposite answers ───────────────────
+
+test('an account with no safes returns an empty list — a real answer', async () => {
+  // Distinct from a failed read, and the caller reports it as "this account has
+  // no safe yet; a fresh create-safe takes ~2-8 min to appear".
+  const { deps } = snapshotStub('[]');
+  assert.deepEqual(await fetchRecipientSafes(deps, ADDR), []);
+});
+
+test('a body that is not a list THROWS instead of reporting zero safes', async () => {
+  // Returning [] for an unrecognised shape would tell the user "op20 has no
+  // safe" on the strength of a response we did not understand — and the fix for
+  // that is to wait for a safe that already exists.
+  const { deps } = snapshotStub('{"error":"nope"}');
+  await assert.rejects(() => fetchRecipientSafes(deps, ADDR), /failed read, not an account without safes/);
+});
+
+test('a non-2xx read throws, and does not imply the account is empty', async () => {
+  const { deps } = snapshotStub(RECIPIENT_FIXTURE, false);
+  await assert.rejects(() => fetchRecipientSafes(deps, ADDR), /snapshot read failed: 502/);
+});
+
+test('malformed JSON throws rather than parsing to nothing', async () => {
+  const { deps } = snapshotStub('<html>gateway timeout</html>');
+  await assert.rejects(() => fetchRecipientSafes(deps, ADDR), /malformed JSON/);
+});
+
+test('an empty account address is refused before any request', async () => {
+  const { deps, reqs } = snapshotStub(RECIPIENT_FIXTURE);
+  await assert.rejects(() => fetchRecipientSafes(deps, '  '), /no account address/);
+  assert.equal(reqs.length, 0);
 });

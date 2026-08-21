@@ -1,0 +1,82 @@
+[
+  {
+    "name": "op20_safe",
+    "address": "omnistar1g7f4k2m9x3vd8w0s5jn6h2ce4mua7lqp8hall4",
+    "isMain": true,
+    "balance": { "amount": "0", "denom": "nost" },
+    "lastActive": "1769591640000",
+    "assets": {
+      "assets": [
+        { "symbol": "BTC", "address": "bc1qg7f4k2m9x3vd8w0s5jn6h2ce4mua7lqp9tnpga", "algo": "secp256k1" },
+        { "symbol": "ETH", "address": "0x7f4c2a9e3d8b0f5a6c2e4d1b7a9c3e5f8d0b2a46", "algo": "secp256k1" },
+        { "symbol": "MATIC", "address": "0x7f4c2a9e3d8b0f5a6c2e4d1b7a9c3e5f8d0b2a46", "algo": "secp256k1" },
+        { "symbol": "POL", "address": "0x7f4c2a9e3d8b0f5a6c2e4d1b7a9c3e5f8d0b2a46", "algo": "secp256k1" },
+        { "symbol": "BASE", "address": "0x7f4c2a9e3d8b0f5a6c2e4d1b7a9c3e5f8d0b2a46", "algo": "secp256k1" },
+        { "symbol": "AVAX", "address": "0x7f4c2a9e3d8b0f5a6c2e4d1b7a9c3e5f8d0b2a46", "algo": "secp256k1" },
+        { "symbol": "DOGE", "address": "DQ7f4k2m9x3vd8w5jn6h2ce4mua7Lqp8Zx", "algo": "secp256k1" },
+        { "symbol": "OST", "address": "omnistar1g7f4k2m9x3vd8w0s5jn6h2ce4mua7lqp8hall4", "algo": "secp256k1" },
+        { "symbol": "SOL", "address": "7f4k2m9x3vd8w5jn6h2ce4mua7Lqp8ZxQ7f4k2m9x3v", "algo": "ed25519" },
+        { "symbol": "ADA", "address": "addr1g7f4k2m9x3vd8w0s5jn6h2ce4mua7lqpg7f4k2m9x3vd8w0s5jn6h2ce4mua7lqpg7f4k2m9x3vd8w0s5jn6h2ce4mua7lqp", "algo": "ed25519" },
+        { "symbol": "XRP", "address": "rQ7f4k2m9x3vd8w5jn6h2ce4mua7Lqp8Z", "algo": "secp256k1" }
+      ]
+    },
+    "groups": []
+  },
+  {
+    "name": "treasury_safe",
+    "address": "omnistar1z9m3t5vd7w2s4jn8h6ce3mua5lqp0x7fe8r4u0",
+    "isMain": true,
+    "balance": { "amount": "0", "denom": "nost" },
+    "lastActive": "1780074120000",
+    "assets": {
+      "assets": [
+        { "symbol": "BTC", "address": "bc1qz9m3t5vd7w2s4jn8h6ce3mua5lqp0x7fq4wl2m", "algo": "secp256k1" },
+        { "symbol": "ETH", "address": "0x3b8e1d7a4f2c9b0e5a7d3c1f8b4e6a2d9c0f5e37", "algo": "secp256k1" },
+        { "symbol": "POL", "address": "0x3b8e1d7a4f2c9b0e5a7d3c1f8b4e6a2d9c0f5e37", "algo": "secp256k1" },
+        { "symbol": "OST", "address": "omnistar1z9m3t5vd7w2s4jn8h6ce3mua5lqp0x7fe8r4u0", "algo": "secp256k1" }
+      ]
+    },
+    "groups": []
+  },
+  {
+    "name": "treasuryAcc_safe",
+    "address": "omnistar1x4h7c2ea9mu5l3qp8z0f6k4t2vd7w5sj3xjaqs",
+    "isMain": true,
+    "balance": { "amount": "0", "denom": "nost" },
+    "lastActive": "1781178000000",
+    "assets": {
+      "assets": [
+        { "symbol": "BTC", "address": "bc1qx4h7c2ea9mu5l3qp8z0f6k4t2vd7w5sjh8r0kd", "algo": "secp256k1" },
+        { "symbol": "OST", "address": "omnistar1x4h7c2ea9mu5l3qp8z0f6k4t2vd7w5sj3xjaqs", "algo": "secp256k1" }
+      ]
+    },
+    "groups": []
+  },
+  {
+    "name": "trExecutor_safe",
+    "address": "omnistar1w5s3jn7h9c2e4mu6l8qp0z5x7f3k2t4vpkqmzj",
+    "isMain": true,
+    "balance": { "amount": "0", "denom": "nost" },
+    "lastActive": "1779697260000",
+    "assets": {
+      "assets": [
+        { "symbol": "OST", "address": "omnistar1w5s3jn7h9c2e4mu6l8qp0z5x7f3k2t4vpkqmzj", "algo": "secp256k1" }
+      ]
+    },
+    "groups": []
+  },
+  {
+    "name": "createTest3_safe",
+    "address": "omnistar1t2v4d6w8s0j3n5h7c9e2m4u6l8q0p3z5740a54",
+    "isMain": true,
+    "balance": { "amount": "0", "denom": "nost" },
+    "lastActive": "1774968900000",
+    "assets": {
+      "assets": [
+        { "symbol": "BTC", "address": "bc1qt2v4d6w8s0j3n5h7c9e2m4u6l8q0p3z5z7m4ha", "algo": "secp256k1" },
+        { "symbol": "OST", "address": "omnistar1t2v4d6w8s0j3n5h7c9e2m4u6l8q0p3z5740a54", "algo": "secp256k1" }
+      ]
+    },
+    "groups": []
+  }
+]
